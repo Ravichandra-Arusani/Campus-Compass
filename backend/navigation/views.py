@@ -80,23 +80,23 @@ def available_rooms(request):
 
     room_type = (request.query_params.get("type") or "").strip().upper()
     if room_type:
+        valid_room_types = {choice[0] for choice in Room.RoomType.choices}
+        if room_type not in valid_room_types:
+            return Response([])
         rooms = rooms.filter(type=room_type)
 
+    serialized_rooms = RoomAvailabilitySerializer(rooms, many=True).data
+
     payload = []
-    for room in rooms:
-        is_available = room.current_occupancy < room.capacity if room.capacity else True
-        if not is_available:
+    for room in serialized_rooms:
+        if not room["is_available"]:
             continue
 
         payload.append(
             {
-                "id": room.id,
-                "building": room.building.name if room.building else "",
-                "name": room.name,
-                "capacity": room.capacity,
-                "currentOccupancy": room.current_occupancy,
-                "type": room.type,
-                "available": is_available,
+                **room,
+                "type": (room.get("type") or "").lower(),
+                "currentOccupancy": room.get("current_occupancy", 0),
             }
         )
 

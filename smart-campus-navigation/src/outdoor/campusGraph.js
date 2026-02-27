@@ -1,4 +1,5 @@
 import turfCentroid from "@turf/centroid"
+import pointOnFeature from "@turf/point-on-feature"
 
 const EARTH_RADIUS_M = 6371000
 const ROAD_NODE_PREFIX = "road_"
@@ -44,6 +45,17 @@ function getDisplayLabel(nodeId, featureById) {
 }
 
 function computeFeatureCentroid(feature) {
+  try {
+    const computed = pointOnFeature(feature)
+    const [lng, lat] = computed?.geometry?.coordinates || []
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return null
+    }
+    return { x: lat, y: lng }
+  } catch {
+    // Fall through to centroid fallback.
+  }
+
   try {
     const computed = turfCentroid(feature)
     const [lng, lat] = computed?.geometry?.coordinates || []

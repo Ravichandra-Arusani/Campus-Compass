@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Campus Navigation</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111827ee;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #f59e0b;
+      --ok: #22c55e;
+      --err: #ef4444;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    .panel {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 1000;
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: var(--panel);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(6px);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+
+    select,
+    button {
+      height: 40px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      font-size: 14px;
+      padding: 0 12px;
+      outline: none;
+    }
+
+    select {
+      color: var(--text);
+      background: #0b1220;
+    }
+
+    button {
+      border-color: #d97706;
+      color: #111827;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .status {
+      margin-top: 8px;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status.ok {
+      color: var(--ok);
+    }
+
+    .status.err {
+      color: var(--err);
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="row">
+      <select id="destination"></select>
+      <button id="startRoute">Start Route</button>
+    </div>
+    <div id="status" class="status">Initializing...</div>
+  </div>
+
+  <div id="map"></div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script>
+    const CAMPUS_GEOJSON = __CAMPUS_JSON__
+    const ROADS_GEOJSON = __ROADS_JSON__
+
+    const VBIT_CENTER = [17.4706, 78.7216]
+    const CAMPUS_ENTRANCE_HINT = [17.470937, 78.723397]
+    const CAMPUS_BOUNDS = {
+      minLat: 17.4696,
+      maxLat: 17.4716,
+      minLng: 78.7209,
+      maxLng: 78.7238,
+    }
+
+    const MIN_ROAD_EDGE_METERS = 1.6
+    const DESTINATION_HINTS = {
+      "pratham": [17.46957, 78.722774],
+      "prathibha": [17.46961, 78.722393],
+      "canteen": [17.46952, 78.723167],
+      "library/administrative block": [17.470589, 78.721254],
+      "library": [17.470589, 78.721254],
+      "avishkar": [17.470052, 78.72121],
+      "nirmithi block": [17.469891, 78.721544],
+      "srujan block": [17.470522, 78.722185],
+      "ground": [17.470522, 78.722185],
+      "entrance": [17.470979, 78.723600],
+      "parking": [17.470503, 78.723923],
+    }
+
+    const statusEl = document.getElementById("status")
+    function setStatus(message, type = "") {
+      statusEl.textContent = message
+      statusEl.className = `status ${type}`.trim()
+    }
+
+    function toRadians(value) {
+      return (value * Math.PI) / 180
+    }
+
+    function distanceMeters(aLat, aLng, bLat, bLng) {
+      const dLat = toRadians(bLat - aLat)
+      const dLng = toRadians(bLng - aLng)
+      const lat1 = toRadians(aLat)
+      const lat2 = toRadians(bLat)
+      const hav =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+      return 2 * 6371000 * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav))
+    }
+
+    function normalizeLngLat(coord) {
+      if (!Array.isArray(coord) || coord.length < 2) return null
+      const lng = Number(coord[0])
+      const lat = Number(coord[1])
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null
+      return [Number(lng.toFixed(6)), Number(lat.toFixed(6))]
+    }
+
+    function collectRoadLineStrings(geojson) {
+      const lines = []
+      ;(geojson?.features || []).forEach((feature) => {
+        const geometry = feature?.geometry
+        if (!geometry) return
+        if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) {
+          lines.push(geometry.coordinates)
+        }
+        if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
+          geometry.coordinates.forEach((line) => {
+            if (Array.isArray(line)) lines.push(line)
+          })
+        }
+      })
+      return lines
+    }
+
+    function buildRoadGraph(geojson) {
+      const nodes = {}
+      const adjacency = {}
+
+      function ensureNode(coord) {
+        const normalized = normalizeLngLat(coord)
+        if (!normalized) return null
+        const [lng, lat] = normalized
+        const key = `${lng},${lat}`
+        if (!nodes[key]) {
+          nodes[key] = { key, lat, lng, neighbors: [] }
+          adjacency[key] = new Map()
+        }
+        return key
+      }
+
+      function connect(aKey, bKey) {
+        if (!aKey || !bKey || aKey === bKey) return
+        const a = nodes[aKey]
+        const b = nodes[bKey]
+        if (!a || !b) return
+        const edgeDistance = distanceMeters(a.lat, a.lng, b.lat, b.lng)
+        if (!Number.isFinite(edgeDistance) || edgeDistance < MIN_ROAD_EDGE_METERS) return
+
+        const current = adjacency[aKey].get(bKey)
+        if (current === undefined || edgeDistance < current) {
+          adjacency[aKey].set(bKey, edgeDistance)
+          adjacency[bKey].set(aKey, edgeDistance)
+        }
+      }
+
+      collectRoadLineStrings(geojson).forEach((line) => {
+        for (let i = 0; i < line.length - 1; i += 1) {
+          const a = ensureNode(line[i])
+          const b = ensureNode(line[i + 1])
+          connect(a, b)
+        }
+      })
+
+      Object.keys(nodes).forEach((key) => {
+        nodes[key].neighbors = [...adjacency[key].entries()].map(([id, weight]) => ({ id, weight }))
+      })
+
+      return nodes
+    }
+
+    function nearestNode(graph, lat, lng) {
+      let nearestId = null
+      let nearestDistance = Number.POSITIVE_INFINITY
+      Object.keys(graph).forEach((id) => {
+        const node = graph[id]
+        const d = distanceMeters(lat, lng, node.lat, node.lng)
+        if (d < nearestDistance) {
+          nearestDistance = d
+          nearestId = id
+        }
+      })
+      return nearestId ? { id: nearestId, distance: nearestDistance } : null
+    }
+
+    function dijkstraPath(graph, startId, endId) {
+      if (!graph[startId] || !graph[endId]) return null
+
+      const distanceById = {}
+      const previousById = {}
+      const visited = new Set()
+      const queue = [[0, startId]]
+
+      Object.keys(graph).forEach((id) => {
+        distanceById[id] = Number.POSITIVE_INFINITY
+      })
+      distanceById[startId] = 0
+
+      while (queue.length) {
+        queue.sort((a, b) => a[0] - b[0])
+        const [distanceSoFar, nodeId] = queue.shift()
+        if (visited.has(nodeId)) continue
+        visited.add(nodeId)
+        if (nodeId === endId) break
+
+        ;(graph[nodeId].neighbors || []).forEach(({ id, weight }) => {
+          const nextDistance = distanceSoFar + weight
+          if (nextDistance < distanceById[id]) {
+            distanceById[id] = nextDistance
+            previousById[id] = nodeId
+            queue.push([nextDistance, id])
+          }
+        })
+      }
+
+      if (!Number.isFinite(distanceById[endId]) || distanceById[endId] === Number.POSITIVE_INFINITY) {
+        return null
+      }
+
+      const pathKeys = []
+      let cursor = endId
+      while (cursor) {
+        pathKeys.unshift(cursor)
+        if (cursor === startId) break
+        cursor = previousById[cursor]
+      }
+      if (pathKeys[0] !== startId) return null
+      return pathKeys.map((id) => [graph[id].lat, graph[id].lng])
+    }
+
+    function flattenCoordinatePairs(value, out) {
+      if (!Array.isArray(value)) return
+      if (value.length >= 2 && Number.isFinite(value[0]) && Number.isFinite(value[1])) {
+        out.push(value)
+        return
+      }
+      value.forEach((child) => flattenCoordinatePairs(child, out))
+    }
+
+    function centroidFromFeature(feature) {
+      const pairs = []
+      flattenCoordinatePairs(feature?.geometry?.coordinates, pairs)
+      if (pairs.length === 0) return null
+      let lngSum = 0
+      let latSum = 0
+      pairs.forEach(([lng, lat]) => {
+        lngSum += lng
+        latSum += lat
+      })
+      return [latSum / pairs.length, lngSum / pairs.length]
+    }
+
+    function normalizeName(value) {
+      return String(value || "").trim().toLowerCase()
+    }
+
+    function appendPathSegment(target, segment) {
+      if (!Array.isArray(segment) || segment.length === 0) return
+      if (target.length === 0) {
+        target.push(...segment)
+        return
+      }
+
+      const [aLat, aLng] = target[target.length - 1]
+      const [bLat, bLng] = segment[0]
+      if (distanceMeters(aLat, aLng, bLat, bLng) <= 1) {
+        target.push(...segment.slice(1))
+      } else {
+        target.push(...segment)
+      }
+    }
+
+    function isInsideCampus([lat, lng]) {
+      return (
+        lat >= CAMPUS_BOUNDS.minLat &&
+        lat <= CAMPUS_BOUNDS.maxLat &&
+        lng >= CAMPUS_BOUNDS.minLng &&
+        lng <= CAMPUS_BOUNDS.maxLng
+      )
+    }
+
+    function pathLengthMeters(path) {
+      let total = 0
+      for (let i = 0; i < path.length - 1; i += 1) {
+        total += distanceMeters(path[i][0], path[i][1], path[i + 1][0], path[i + 1][1])
+      }
+      return total
+    }
+
+    async function fetchOsrmConnector(start, end) {
+      const [startLat, startLng] = start
+      const [endLat, endLng] = end
+      const url =
+        "https://router.project-osrm.org/route/v1/foot/" +
+        `${startLng},${startLat};${endLng},${endLat}` +
+        "?overview=full&geometries=geojson"
+
+      try {
+        const response = await fetch(url)
+        if (!response.ok) throw new Error(`OSRM ${response.status}`)
+        const payload = await response.json()
+        const coordinates = payload?.routes?.[0]?.geometry?.coordinates
+        if (Array.isArray(coordinates) && coordinates.length > 1) {
+          return coordinates.map(([lng, lat]) => [lat, lng])
+        }
+      } catch (_) {
+        // Fall back to straight connector.
+      }
+
+      return [start, end]
+    }
+
+    const map = L.map("map", { zoomControl: true }).setView(VBIT_CENTER, 18)
+
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap & Carto",
+      maxZoom: 20,
+    }).addTo(map)
+
+    function buildingStyle(feature) {
+      const type = String(feature?.properties?.type || "").toLowerCase()
+      if (type === "hostel") {
+        return { color: "#3b82f6", weight: 2, fillColor: "#1d4ed8", fillOpacity: 0.28 }
+      }
+      if (type === "ground") {
+        return { color: "#22c55e", weight: 2, fillColor: "#15803d", fillOpacity: 0.22 }
+      }
+      if (type === "parking") {
+        return { color: "#f97316", weight: 2, fillColor: "#7c2d12", fillOpacity: 0.14, dashArray: "4 4" }
+      }
+      return { color: "#f59e0b", weight: 2, fillColor: "#111827", fillOpacity: 0.18 }
+    }
+
+    const buildingLayer = L.geoJSON(CAMPUS_GEOJSON, {
+      style: buildingStyle,
+      onEachFeature: (feature, layer) => {
+        const name = String(feature?.properties?.name || "").trim()
+        if (name) {
+          layer.bindTooltip(name, { sticky: true, direction: "top", opacity: 0.95 })
+        }
+        layer.on("mouseover", () => layer.setStyle({ fillOpacity: 0.5, weight: 3 }))
+        layer.on("mouseout", () => layer.setStyle(buildingStyle(feature)))
+      },
+    }).addTo(map)
+
+    L.geoJSON(ROADS_GEOJSON, {
+      style: { color: "#38bdf8", weight: 3, opacity: 0.5, lineCap: "round", lineJoin: "round" },
+      interactive: false,
+    }).addTo(map)
+
+    if (buildingLayer.getBounds().isValid()) {
+      map.fitBounds(buildingLayer.getBounds(), { padding: [30, 30], maxZoom: 19 })
+    }
+
+    const roadGraph = buildRoadGraph(ROADS_GEOJSON)
+    const destinationItems = []
+    const destinationSeen = new Set()
+
+    ;(CAMPUS_GEOJSON?.features || []).forEach((feature) => {
+      const name = String(feature?.properties?.name || "").trim()
+      if (!name) return
+      const normalized = normalizeName(name)
+      if (destinationSeen.has(normalized)) return
+      destinationSeen.add(normalized)
+
+      const hinted = DESTINATION_HINTS[normalized]
+      const fallback = centroidFromFeature(feature)
+      const destinationCoord = hinted || fallback
+      if (!destinationCoord || !Number.isFinite(destinationCoord[0]) || !Number.isFinite(destinationCoord[1])) return
+
+      destinationItems.push({ name, coord: destinationCoord })
+    })
+
+    destinationItems.sort((a, b) => a.name.localeCompare(b.name))
+    const destinationSelect = document.getElementById("destination")
+    destinationItems.forEach((item) => {
+      const option = document.createElement("option")
+      option.value = item.name
+      option.textContent = item.name
+      destinationSelect.appendChild(option)
+    })
+
+    const userMarker = L.circleMarker(VBIT_CENTER, {
+      radius: 8,
+      color: "#ffffff",
+      weight: 2,
+      fillColor: "#3b82f6",
+      fillOpacity: 1,
+    }).addTo(map)
+
+    let userLocation = null
+    let routeLayer = null
+    let destinationMarker = null
+
+    async function startRoute() {
+      if (!userLocation) {
+        setStatus("Waiting for location fix...", "err")
+        return
+      }
+
+      const selectedName = destinationSelect.value
+      const destination = destinationItems.find((item) => item.name === selectedName)
+      if (!destination) {
+        setStatus("Select a destination.", "err")
+        return
+      }
+
+      const connector = []
+      let startSnap = null
+
+      if (isInsideCampus(userLocation)) {
+        startSnap = nearestNode(roadGraph, userLocation[0], userLocation[1])
+        if (!startSnap) {
+          setStatus("Could not snap current location to roads.", "err")
+          return
+        }
+        const startRoadCoord = [roadGraph[startSnap.id].lat, roadGraph[startSnap.id].lng]
+        if (startSnap.distance > 3) {
+          connector.push(userLocation, startRoadCoord)
+        }
+      } else {
+        const entranceSnap = nearestNode(roadGraph, CAMPUS_ENTRANCE_HINT[0], CAMPUS_ENTRANCE_HINT[1])
+        if (!entranceSnap) {
+          setStatus("Could not snap campus entrance to roads.", "err")
+          return
+        }
+        startSnap = entranceSnap
+        const entranceCoord = [roadGraph[entranceSnap.id].lat, roadGraph[entranceSnap.id].lng]
+        const osrmPath = await fetchOsrmConnector(userLocation, entranceCoord)
+        appendPathSegment(connector, osrmPath)
+      }
+
+      const endSnap = nearestNode(roadGraph, destination.coord[0], destination.coord[1])
+      if (!endSnap) {
+        setStatus("Could not snap destination to roads.", "err")
+        return
+      }
+
+      const graphPath = dijkstraPath(roadGraph, startSnap.id, endSnap.id)
+      if (!graphPath || graphPath.length < 2) {
+        setStatus("No campus path found.", "err")
+        return
+      }
+
+      const fullPath = []
+      appendPathSegment(fullPath, connector)
+      appendPathSegment(fullPath, graphPath)
+
+      if (routeLayer) routeLayer.remove()
+      if (destinationMarker) destinationMarker.remove()
+
+      routeLayer = L.featureGroup().addTo(map)
+
+      if (connector.length >= 2) {
+        L.polyline(connector, {
+          color: "#94a3b8",
+          weight: 3,
+          opacity: 0.8,
+          dashArray: "4,4",
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(routeLayer)
+      }
+
+      L.polyline(graphPath, {
+        color: "#f59e0b",
+        weight: 6,
+        opacity: 1,
+        lineCap: "round",
+        lineJoin: "round",
+      }).addTo(routeLayer)
+
+      destinationMarker = L.circleMarker(destination.coord, {
+        radius: 9,
+        color: "#f59e0b",
+        weight: 3,
+        fillColor: "#fbbf24",
+        fillOpacity: 1,
+      }).addTo(map)
+      destinationMarker.bindPopup(destination.name)
+
+      const bounds = routeLayer.getBounds()
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 19 })
+      }
+
+      setStatus(
+        `Route ready: ${destination.name} | ${Math.round(pathLengthMeters(fullPath))}m`,
+        "ok"
+      )
+    }
+
+    document.getElementById("startRoute").addEventListener("click", startRoute)
+
+    function updateUserLocation(lat, lng, label) {
+      userLocation = [lat, lng]
+      userMarker.setLatLng(userLocation)
+      userMarker.bindPopup(label)
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        (position) => {
+          const { latitude, longitude, accuracy } = position.coords
+          updateUserLocation(latitude, longitude, `Your location (+/-${Math.round(accuracy)}m)`)
+          setStatus("GPS locked. Select destination and start route.", "ok")
+        },
+        (error) => {
+          updateUserLocation(
+            CAMPUS_ENTRANCE_HINT[0],
+            CAMPUS_ENTRANCE_HINT[1],
+            "Location unavailable - using campus entrance"
+          )
+          setStatus(`GPS unavailable (${error.code}). Using entrance as start.`, "err")
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      )
+    } else {
+      updateUserLocation(
+        CAMPUS_ENTRANCE_HINT[0],
+        CAMPUS_ENTRANCE_HINT[1],
+        "Geolocation unsupported - using campus entrance"
+      )
+      setStatus("Geolocation unsupported. Using entrance as start.", "err")
+    }
+
+    console.log("Standalone map ready", {
+      roadsLoaded: Array.isArray(ROADS_GEOJSON?.features) ? ROADS_GEOJSON.features.length : 0,
+      graphNodes: Object.keys(roadGraph).length,
+      destinations: destinationItems.length,
+    })
+  </script>
+</body>
+</html>

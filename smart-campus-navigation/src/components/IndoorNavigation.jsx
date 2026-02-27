@@ -2,7 +2,7 @@
 // Nirmithi Block - 3rd Floor (CSBS Dept)
 // Matches hand-drawn plan: rooms left, corridor right, NO entrance node
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { nodes, edges } from "../indoor/nirmithiGraph"
 import { astar } from "../indoor/astar"
 import DestinationSearch from "./DestinationSearch"
@@ -146,9 +146,9 @@ function FloorPlan({ path, destination, currentNode }) {
   )
 }
 
-export default function IndoorNavigation({ startNode }) {
+export default function IndoorNavigation() {
   const FLOOR_ENTRY_NODE = "stairs"
-  const [currentNode, setCurrentNode] = useState(FLOOR_ENTRY_NODE)
+  const currentNode = FLOOR_ENTRY_NODE
   const [dest,  setDest]  = useState("")
   const [path,  setPath]  = useState([])
   const [error, setError] = useState("")
@@ -156,14 +156,6 @@ export default function IndoorNavigation({ startNode }) {
   const destOptions = useMemo(
     () => DESTINATIONS.map(d => ({ id: d.id, label: d.name })), []
   )
-
-  useEffect(() => {
-    // Always start indoor floor navigation from stairs.
-    setCurrentNode(FLOOR_ENTRY_NODE)
-    setDest("")
-    setPath([])
-    setError("")
-  }, [startNode])
 
   function handleNavigate() {
     setError("")

@@ -5,12 +5,12 @@ const TILE_PATTERNS = [
   /openstreetmap\.org/,
 ]
 
-self.addEventListener('install', e => {
+self.addEventListener('install', () => {
   self.skipWaiting()
 })
 
-self.addEventListener('activate', e => {
-  e.waitUntil(clients.claim())
+self.addEventListener('activate', event => {
+  event.waitUntil(self.clients.claim())
 })
 
 self.addEventListener('fetch', e => {

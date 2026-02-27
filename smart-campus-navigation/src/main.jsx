@@ -1,11 +1,6 @@
-﻿// Add this to src/main.jsx or index.html
-// Registers service worker for tile caching
-
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then(() => console.log('Tile cache SW registered'))
-      .catch(err => console.warn('SW registration failed:', err))
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
   })
 }
 
@@ -22,4 +17,3 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>,
 )
-

@@ -1,17 +1,10 @@
 import { useEffect, useMemo, useState } from "react"
 
-const TIMELINE_SLOTS = ["09:00", "11:00", "13:00", "15:00", "17:00"]
-
 const ROOM_TYPE_LABELS = {
   ALL: "All Types",
   CLASSROOM: "Classroom",
   LAB: "Lab",
   AUDITORIUM: "Auditorium",
-}
-
-function projectedOccupancy(baseOccupancy, slotIndex) {
-  const swing = [0, 0.12, -0.08, 0.18, -0.05][slotIndex] ?? 0
-  return Math.max(0, Math.round(baseOccupancy * (1 + swing)))
 }
 
 function makeRoomKey(room) {
@@ -42,6 +35,7 @@ export default function RoomAvailability() {
           throw new Error("Failed to load room availability.")
         }
         const payload = await response.json()
+        console.debug("[RoomAvailability] API response:", payload)
         if (ignore) return
 
         const nextRooms = Array.isArray(payload) ? payload : []
@@ -92,7 +86,13 @@ export default function RoomAvailability() {
   const capacity =
     activeRoom && typeof activeRoom.capacity === "number" ? activeRoom.capacity : 0
   const occupancyRatio = capacity > 0 ? currentOccupancy / capacity : 0
-  const isAvailable = occupancyRatio < 0.8
+  const isAvailable = Boolean(
+    activeRoom?.is_available ??
+      activeRoom?.available ??
+      (capacity > 0 ? currentOccupancy < capacity : true)
+  )
+  const roomType = (activeRoom?.type || "").toString().toLowerCase()
+  const roomFloor = activeRoom?.floor
 
   return (
     <section className="panel">
@@ -147,6 +147,12 @@ export default function RoomAvailability() {
 
           <div className="classroom-availability-metrics">
             <p>
+              Type: <strong>{roomType || "unknown"}</strong>
+            </p>
+            <p>
+              Floor: <strong>{roomFloor ?? "N/A"}</strong>
+            </p>
+            <p>
               Current occupancy: <strong>{currentOccupancy}</strong>
             </p>
             <p>
@@ -162,18 +168,6 @@ export default function RoomAvailability() {
               className={isAvailable ? "signal-bar-fill available" : "signal-bar-fill busy"}
               style={{ width: `${Math.min(occupancyRatio * 100, 100)}%` }}
             />
-          </div>
-
-          <div className="classroom-timeline">
-            <h4>Projected Occupancy Timeline</h4>
-            <ul>
-              {TIMELINE_SLOTS.map((slot, index) => (
-                <li key={slot}>
-                  <span>{slot}</span>
-                  <strong>{projectedOccupancy(currentOccupancy, index)} seats</strong>
-                </li>
-              ))}
-            </ul>
           </div>
         </article>
       ) : (

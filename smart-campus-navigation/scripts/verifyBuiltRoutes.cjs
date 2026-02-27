@@ -3,7 +3,7 @@ const fs = require("fs")
 const { chromium } = require("playwright")
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:4173"
-const FOOTPRINTS_GEOJSON_PATH = path.join(process.cwd(), "public", "data", "campus.geojson")
+const FOOTPRINTS_GEOJSON_PATH = path.join(process.cwd(), "public", "data", "Campus map.geojson")
 const FORBIDDEN_FOOTPRINT_TYPES = new Set(["academic", "service", "hostel"])
 const CUT_THROUGH_REFERENCES = [
   [17.470196, 78.721807],

@@ -1,87 +1,50 @@
-const EARTH_RADIUS_M = 6371000
-const ROAD_POINT_PRECISION = 5
-const MIN_ROAD_EDGE_METERS = 0.5
-const INTERSECTION_EPSILON = 1e-9
+import pointOnFeature from "@turf/point-on-feature"
 
-function toRadians(degrees) {
-  return (degrees * Math.PI) / 180
+const EARTH_RADIUS_M = 6371000
+const ROAD_POINT_PRECISION = 6
+const MIN_ROAD_EDGE_METERS = 1.6
+const DEFAULT_SNAP_RADIUS_METERS = 40
+const BUILDING_SNAP_RADIUS_METERS = 40
+
+const roadGraphConnectivityByGraph = new WeakMap()
+const buildingSnapIndexByGraph = new WeakMap()
+
+function toRadians(value) {
+  return (value * Math.PI) / 180
+}
+
+export function normalize(coord) {
+  const [lng, lat] = Array.isArray(coord) ? coord : []
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    return null
+  }
+
+  return [Number(lng.toFixed(ROAD_POINT_PRECISION)), Number(lat.toFixed(ROAD_POINT_PRECISION))]
+}
+
+function toRoadNodeKey(lng, lat) {
+  return `${lng},${lat}`
+}
+
+export function haversine(a, b) {
+  if (!a || !b || !Number.isFinite(a.lat) || !Number.isFinite(a.lng) || !Number.isFinite(b.lat) || !Number.isFinite(b.lng)) {
+    return Number.POSITIVE_INFINITY
+  }
+
+  const dLat = toRadians(b.lat - a.lat)
+  const dLng = toRadians(b.lng - a.lng)
+  const lat1 = toRadians(a.lat)
+  const lat2 = toRadians(b.lat)
+
+  const haversineValue =
+    Math.sin(dLat / 2) ** 2 +
+    Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2)
+
+  return 2 * EARTH_RADIUS_M * Math.atan2(Math.sqrt(haversineValue), Math.sqrt(1 - haversineValue))
 }
 
 function distanceMeters(aLat, aLng, bLat, bLng) {
-  const lat1 = toRadians(aLat)
-  const lat2 = toRadians(bLat)
-  const dLat = toRadians(bLat - aLat)
-  const dLng = toRadians(bLng - aLng)
-  const haversineValue =
-    Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
-  const arc = 2 * Math.atan2(Math.sqrt(haversineValue), Math.sqrt(1 - haversineValue))
-  return EARTH_RADIUS_M * arc
-}
-
-function toRoadNodeKey(lat, lng) {
-  return `${lat.toFixed(ROAD_POINT_PRECISION)},${lng.toFixed(ROAD_POINT_PRECISION)}`
-}
-
-function toLatLngCoordinatePair(coordinatePair) {
-  const [lng, lat] = Array.isArray(coordinatePair) ? coordinatePair : []
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return null
-  }
-  return [lat, lng]
-}
-
-function isCoordinatePairEqual(first, second, tolerance = 1e-7) {
-  if (!Array.isArray(first) || !Array.isArray(second)) {
-    return false
-  }
-
-  return (
-    Math.abs(first[0] - second[0]) <= tolerance &&
-    Math.abs(first[1] - second[1]) <= tolerance
-  )
-}
-
-function segmentIntersectionPoint(startA, endA, startB, endB) {
-  if (!startA || !endA || !startB || !endB) {
-    return null
-  }
-
-  const ax = startA[1]
-  const ay = startA[0]
-  const bx = endA[1]
-  const by = endA[0]
-  const cx = startB[1]
-  const cy = startB[0]
-  const dx = endB[1]
-  const dy = endB[0]
-
-  const rX = bx - ax
-  const rY = by - ay
-  const sX = dx - cx
-  const sY = dy - cy
-  const denominator = rX * sY - rY * sX
-
-  if (Math.abs(denominator) <= INTERSECTION_EPSILON) {
-    return null
-  }
-
-  const cMinusAX = cx - ax
-  const cMinusAY = cy - ay
-  const t = (cMinusAX * sY - cMinusAY * sX) / denominator
-  const u = (cMinusAX * rY - cMinusAY * rX) / denominator
-
-  if (
-    t < -INTERSECTION_EPSILON ||
-    t > 1 + INTERSECTION_EPSILON ||
-    u < -INTERSECTION_EPSILON ||
-    u > 1 + INTERSECTION_EPSILON
-  ) {
-    return null
-  }
-
-  const intersectionX = ax + t * rX
-  const intersectionY = ay + t * rY
-  return [intersectionY, intersectionX]
+  return haversine({ lat: aLat, lng: aLng }, { lat: bLat, lng: bLng })
 }
 
 function projectPointToSegment(targetLat, targetLng, aLat, aLng, bLat, bLng) {
@@ -110,7 +73,7 @@ function projectPointToSegment(targetLat, targetLng, aLat, aLng, bLat, bLng) {
   const abLenSq = abx * abx + aby * aby
 
   if (!Number.isFinite(abLenSq) || abLenSq === 0) {
-    return { lat: aLat, lng: aLng, t: 0 }
+    return { lat: aLat, lng: aLng }
   }
 
   let t = (apx * abx + apy * aby) / abLenSq
@@ -123,24 +86,33 @@ function projectPointToSegment(targetLat, targetLng, aLat, aLng, bLat, bLng) {
     t = 1
   }
 
-  const projX = ax + abx * t
-  const projY = ay + aby * t
-
-  return { lat: projY, lng: projX, t }
+  return {
+    lat: ay + aby * t,
+    lng: ax + abx * t,
+  }
 }
 
 function getRoadLineCoordinateSets(roadGeoJsonPayload) {
   const features = Array.isArray(roadGeoJsonPayload?.features) ? roadGeoJsonPayload.features : []
   const lineCoordinateSets = []
+  const geometryTypeCounts = {}
+  let acceptedLineFeatureCount = 0
+  let ignoredNonLineFeatureCount = 0
 
   features.forEach((feature) => {
     const geometry = feature?.geometry
     if (!geometry) {
+      ignoredNonLineFeatureCount += 1
+      geometryTypeCounts.Unknown = (geometryTypeCounts.Unknown || 0) + 1
       return
     }
 
+    const geometryType = String(geometry.type || "Unknown")
+    geometryTypeCounts[geometryType] = (geometryTypeCounts[geometryType] || 0) + 1
+
     if (geometry.type === "LineString" && Array.isArray(geometry.coordinates)) {
       lineCoordinateSets.push(geometry.coordinates)
+      acceptedLineFeatureCount += 1
       return
     }
 
@@ -150,333 +122,527 @@ function getRoadLineCoordinateSets(roadGeoJsonPayload) {
           lineCoordinateSets.push(lineCoordinates)
         }
       })
-    }
-  })
-
-  return lineCoordinateSets
-}
-
-function getRoadSegments(roadGeoJsonPayload) {
-  const lineCoordinateSets = getRoadLineCoordinateSets(roadGeoJsonPayload)
-  const segments = []
-
-  lineCoordinateSets.forEach((lineCoordinates) => {
-    for (let index = 0; index < lineCoordinates.length - 1; index += 1) {
-      const start = toLatLngCoordinatePair(lineCoordinates[index])
-      const end = toLatLngCoordinatePair(lineCoordinates[index + 1])
-      if (!start || !end) {
-        continue
-      }
-
-      const [startLat, startLng] = start
-      const [endLat, endLng] = end
-      if (distanceMeters(startLat, startLng, endLat, endLng) < MIN_ROAD_EDGE_METERS) {
-        continue
-      }
-
-      segments.push({ start, end })
-    }
-  })
-
-  return segments
-}
-
-function closeRingIfNeeded(ringCoordinates) {
-  if (!Array.isArray(ringCoordinates) || ringCoordinates.length < 3) {
-    return null
-  }
-
-  const normalizedRing = ringCoordinates
-    .map((coordinatePair) => toLatLngCoordinatePair(coordinatePair))
-    .filter(Boolean)
-
-  if (normalizedRing.length < 3) {
-    return null
-  }
-
-  if (!isCoordinatePairEqual(normalizedRing[0], normalizedRing[normalizedRing.length - 1])) {
-    normalizedRing.push([...normalizedRing[0]])
-  }
-
-  return normalizedRing
-}
-
-function getBlockingBuildingRings(buildingGeoJsonPayload) {
-  const blockedTypes = new Set(["academic", "service", "hostel"])
-  const features = Array.isArray(buildingGeoJsonPayload?.features)
-    ? buildingGeoJsonPayload.features
-    : []
-  const rings = []
-
-  features.forEach((feature) => {
-    const featureType = feature?.properties?.type
-    if (!blockedTypes.has(featureType)) {
+      acceptedLineFeatureCount += 1
       return
     }
 
-    const geometry = feature?.geometry
-    if (!geometry) {
-      return
-    }
-
-    if (geometry.type === "Polygon" && Array.isArray(geometry.coordinates)) {
-      const ring = closeRingIfNeeded(geometry.coordinates[0])
-      if (ring) {
-        rings.push(ring)
-      }
-      return
-    }
-
-    if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) {
-      geometry.coordinates.forEach((polygonCoordinates) => {
-        const ring = closeRingIfNeeded(polygonCoordinates?.[0])
-        if (ring) {
-          rings.push(ring)
-        }
-      })
-    }
+    ignoredNonLineFeatureCount += 1
   })
 
-  return rings
+  return {
+    lineCoordinateSets,
+    sourceStats: {
+      totalFeatures: features.length,
+      acceptedLineFeatureCount,
+      ignoredNonLineFeatureCount,
+      geometryTypeCounts,
+    },
+  }
 }
 
-function pointInRing(point, ring) {
-  if (!Array.isArray(point) || !Array.isArray(ring) || ring.length < 3) {
-    return false
+function ensureAdjacencyEntry(adjacency, nodeId) {
+  let entry = adjacency.get(nodeId)
+  if (!entry) {
+    entry = new Map()
+    adjacency.set(nodeId, entry)
   }
-
-  const y = point[0]
-  const x = point[1]
-  let inside = false
-
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const yi = ring[i][0]
-    const xi = ring[i][1]
-    const yj = ring[j][0]
-    const xj = ring[j][1]
-    const crossesLatitude = (yi > y) !== (yj > y)
-
-    if (!crossesLatitude) {
-      continue
-    }
-
-    const slopeDenominator = yj - yi
-    const safeDenominator =
-      Math.abs(slopeDenominator) < INTERSECTION_EPSILON
-        ? INTERSECTION_EPSILON
-        : slopeDenominator
-    const candidateX = ((xj - xi) * (y - yi)) / safeDenominator + xi
-
-    if (x < candidateX) {
-      inside = !inside
-    }
-  }
-
-  return inside
+  return entry
 }
 
-function segmentCrossesRing(start, end, ring) {
-  if (!Array.isArray(start) || !Array.isArray(end) || !Array.isArray(ring) || ring.length < 3) {
-    return false
-  }
-
-  const midpoint = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
-  if (pointInRing(midpoint, ring)) {
-    return true
-  }
-
-  for (let index = 0; index < ring.length - 1; index += 1) {
-    const ringStart = ring[index]
-    const ringEnd = ring[index + 1]
-    const intersection = segmentIntersectionPoint(start, end, ringStart, ringEnd)
-    if (!intersection) {
-      continue
-    }
-
-    if (isCoordinatePairEqual(intersection, start) || isCoordinatePairEqual(intersection, end)) {
-      continue
-    }
-
-    return true
-  }
-
-  return false
-}
-
-function segmentCrossesBlockingRings(start, end, blockingRings) {
-  if (!Array.isArray(blockingRings) || blockingRings.length === 0) {
-    return false
-  }
-
-  return blockingRings.some((ring) => segmentCrossesRing(start, end, ring))
-}
-
-function appendUniqueCoordinate(points, candidate) {
-  if (!Array.isArray(candidate)) {
+function connectNodes(nodes, adjacency, fromNodeId, toNodeId) {
+  if (!fromNodeId || !toNodeId || fromNodeId === toNodeId) {
     return
   }
 
-  const exists = points.some((point) => isCoordinatePairEqual(point, candidate))
-  if (!exists) {
-    points.push(candidate)
+  const fromNode = nodes.get(fromNodeId)
+  const toNode = nodes.get(toNodeId)
+  if (!fromNode || !toNode) {
+    return
+  }
+
+  const edgeDistance = haversine(fromNode, toNode)
+  if (!Number.isFinite(edgeDistance) || edgeDistance < MIN_ROAD_EDGE_METERS) {
+    return
+  }
+
+  const fromAdjacency = ensureAdjacencyEntry(adjacency, fromNodeId)
+  const toAdjacency = ensureAdjacencyEntry(adjacency, toNodeId)
+  const existingDistance = fromAdjacency.get(toNodeId)
+
+  if (existingDistance === undefined || edgeDistance < existingDistance) {
+    fromAdjacency.set(toNodeId, edgeDistance)
+    toAdjacency.set(fromNodeId, edgeDistance)
   }
 }
 
-function computeSegmentProgress(point, start, end) {
-  const latSpan = end[0] - start[0]
-  const lngSpan = end[1] - start[1]
+function buildRoadNodes(roadGeoJsonPayload) {
+  const nodes = new Map()
+  const adjacency = new Map()
+  const { lineCoordinateSets, sourceStats } = getRoadLineCoordinateSets(roadGeoJsonPayload)
 
-  if (Math.abs(latSpan) >= Math.abs(lngSpan) && Math.abs(latSpan) > INTERSECTION_EPSILON) {
-    return (point[0] - start[0]) / latSpan
-  }
-
-  if (Math.abs(lngSpan) > INTERSECTION_EPSILON) {
-    return (point[1] - start[1]) / lngSpan
-  }
-
-  return 0
-}
-
-function syncNeighborsFromAdjacency(graph, adjacency) {
-  Object.keys(graph).forEach((nodeKey) => {
-    graph[nodeKey].neighbors = [...(adjacency[nodeKey] || new Map()).entries()].map(
-      ([neighborKey, weight]) => ({ key: neighborKey, dist: weight })
-    )
-  })
-}
-
-function assignConnectedComponents(graph) {
-  const unseenNodeKeys = new Set(Object.keys(graph))
-  const components = []
-
-  while (unseenNodeKeys.size > 0) {
-    const seedNodeKey = unseenNodeKeys.values().next().value
-    const stack = [seedNodeKey]
-    const componentNodes = []
-    unseenNodeKeys.delete(seedNodeKey)
-
-    while (stack.length > 0) {
-      const currentNodeKey = stack.pop()
-      componentNodes.push(currentNodeKey)
-      graph[currentNodeKey].componentId = components.length
-
-      const neighbors = graph[currentNodeKey]?.neighbors || []
-      neighbors.forEach(({ key: neighborNodeKey }) => {
-        if (!unseenNodeKeys.has(neighborNodeKey)) {
-          return
-        }
-        unseenNodeKeys.delete(neighborNodeKey)
-        stack.push(neighborNodeKey)
-      })
-    }
-
-    components.push(componentNodes)
-  }
-
-  return components.sort((first, second) => second.length - first.length)
-}
-
-export function buildRoadPathGraph(roadGeoJsonPayload, buildingGeoJsonPayload = null, options = {}) {
-  const rawSegments = getRoadSegments(roadGeoJsonPayload)
-  const shouldBlockBuildingCrossings = Boolean(options?.blockBuildingCrossings)
-  const blockingRings = shouldBlockBuildingCrossings
-    ? getBlockingBuildingRings(buildingGeoJsonPayload)
-    : []
-  const splitPointsBySegment = rawSegments.map((segment) => [segment.start, segment.end])
-  const graph = {}
-  const adjacency = {}
-
-  for (let i = 0; i < rawSegments.length; i += 1) {
-    for (let j = i + 1; j < rawSegments.length; j += 1) {
-      const intersection = segmentIntersectionPoint(
-        rawSegments[i].start,
-        rawSegments[i].end,
-        rawSegments[j].start,
-        rawSegments[j].end
-      )
-      if (!intersection) {
-        continue
-      }
-
-      appendUniqueCoordinate(splitPointsBySegment[i], intersection)
-      appendUniqueCoordinate(splitPointsBySegment[j], intersection)
-    }
-  }
-
-  function ensureNode([lat, lng]) {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+  function getNodeId(coord) {
+    const normalized = normalize(coord)
+    if (!normalized) {
       return null
     }
 
-    const normalizedLat = Number.parseFloat(lat.toFixed(ROAD_POINT_PRECISION))
-    const normalizedLng = Number.parseFloat(lng.toFixed(ROAD_POINT_PRECISION))
-    const nodeKey = toRoadNodeKey(normalizedLat, normalizedLng)
-
-    if (!graph[nodeKey]) {
-      graph[nodeKey] = {
-        coord: [normalizedLat, normalizedLng],
+    const [lng, lat] = normalized
+    const nodeId = toRoadNodeKey(lng, lat)
+    if (!nodes.has(nodeId)) {
+      nodes.set(nodeId, {
+        id: nodeId,
+        lng,
+        lat,
         neighbors: [],
-        componentId: null,
-      }
+      })
+      adjacency.set(nodeId, new Map())
     }
 
-    adjacency[nodeKey] = adjacency[nodeKey] || new Map()
-    return nodeKey
+    return nodeId
   }
 
-  function connectNodes(a, b) {
-    if (!a || !b || a === b) {
+  lineCoordinateSets.forEach((lineCoordinates) => {
+    if (!Array.isArray(lineCoordinates) || lineCoordinates.length < 2) {
       return
     }
 
-    const [aLat, aLng] = graph[a].coord
-    const [bLat, bLng] = graph[b].coord
-
-    if (segmentCrossesBlockingRings([aLat, aLng], [bLat, bLng], blockingRings)) {
-      return
-    }
-
-    const segmentDistance = distanceMeters(aLat, aLng, bLat, bLng)
-    if (!Number.isFinite(segmentDistance) || segmentDistance < MIN_ROAD_EDGE_METERS) {
-      return
-    }
-
-    const existingWeight = adjacency[a].get(b)
-    if (existingWeight === undefined || segmentDistance < existingWeight) {
-      adjacency[a].set(b, segmentDistance)
-      adjacency[b].set(a, segmentDistance)
-    }
-  }
-
-  rawSegments.forEach((segment, index) => {
-    const splitPoints = splitPointsBySegment[index] || []
-    const uniquePoints = []
-    splitPoints.forEach((point) => appendUniqueCoordinate(uniquePoints, point))
-
-    uniquePoints.sort(
-      (first, second) =>
-        computeSegmentProgress(first, segment.start, segment.end) -
-        computeSegmentProgress(second, segment.start, segment.end)
-    )
-
-    for (let pointIndex = 0; pointIndex < uniquePoints.length - 1; pointIndex += 1) {
-      const fromNode = ensureNode(uniquePoints[pointIndex])
-      const toNode = ensureNode(uniquePoints[pointIndex + 1])
-      connectNodes(fromNode, toNode)
+    for (let index = 0; index < lineCoordinates.length - 1; index += 1) {
+      const fromNodeId = getNodeId(lineCoordinates[index])
+      const toNodeId = getNodeId(lineCoordinates[index + 1])
+      connectNodes(nodes, adjacency, fromNodeId, toNodeId)
     }
   })
 
-  syncNeighborsFromAdjacency(graph, adjacency)
-  const components = assignConnectedComponents(graph)
+  nodes.forEach((node, nodeId) => {
+    const neighborEntries = [...(adjacency.get(nodeId) || new Map()).entries()]
+      .sort((first, second) => first[0].localeCompare(second[0]))
 
-  if (components.length > 1) {
+    node.neighbors = neighborEntries.map(([neighborId, weight]) => ({
+      id: neighborId,
+      weight,
+    }))
+  })
+
+  return { nodes, adjacency, sourceStats }
+}
+
+function readNode(nodes, nodeId) {
+  return nodes instanceof Map ? nodes.get(nodeId) : nodes?.[nodeId]
+}
+
+function readNodeIds(nodes) {
+  return nodes instanceof Map ? [...nodes.keys()] : Object.keys(nodes || {})
+}
+
+function readNeighborIds(node) {
+  if (!node || !Array.isArray(node.neighbors)) {
+    return []
+  }
+
+  return node.neighbors
+    .map((neighbor) => {
+      if (typeof neighbor?.id === "string") return neighbor.id
+      if (typeof neighbor?.key === "string") return neighbor.key
+      return null
+    })
+    .filter(Boolean)
+}
+
+export function testConnectivity(nodes) {
+  const visited = new Set()
+  const componentByNode = new Map()
+  const nodeIds = readNodeIds(nodes)
+
+  if (nodeIds.length === 0) {
+    return {
+      visited: 0,
+      total: 0,
+      componentCount: 0,
+      componentByNode,
+    }
+  }
+
+  let componentCount = 0
+
+  function dfs(startNodeId) {
+    const stack = [startNodeId]
+    while (stack.length > 0) {
+      const nodeId = stack.pop()
+      if (!nodeId || visited.has(nodeId)) {
+        continue
+      }
+
+      visited.add(nodeId)
+      componentByNode.set(nodeId, componentCount)
+
+      const node = readNode(nodes, nodeId)
+      readNeighborIds(node).forEach((neighborId) => {
+        if (!visited.has(neighborId)) {
+          stack.push(neighborId)
+        }
+      })
+    }
+  }
+
+  nodeIds.forEach((nodeId) => {
+    if (visited.has(nodeId)) {
+      return
+    }
+    dfs(nodeId)
+    componentCount += 1
+  })
+
+  return {
+    visited: visited.size,
+    total: nodeIds.length,
+    componentCount,
+    componentByNode,
+  }
+}
+
+function buildGraphObject(nodes, adjacency, connectivity) {
+  const graph = {}
+
+  nodes.forEach((node, nodeId) => {
+    graph[nodeId] = {
+      coord: [node.lat, node.lng],
+      componentId: connectivity.componentByNode.get(nodeId) ?? null,
+      neighbors: [...(adjacency.get(nodeId) || new Map()).entries()].map(
+        ([neighborId, distance]) => ({ key: neighborId, dist: distance })
+      ),
+    }
+  })
+
+  return graph
+}
+
+function toCampusId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function collectCoordinatePairs(value, pairs) {
+  if (!Array.isArray(value)) {
+    return
+  }
+
+  if (value.length >= 2 && Number.isFinite(value[0]) && Number.isFinite(value[1])) {
+    pairs.push([value[0], value[1]])
+    return
+  }
+
+  value.forEach((child) => {
+    collectCoordinatePairs(child, pairs)
+  })
+}
+
+function getFeatureAverageCoordinate(feature) {
+  const coordinates = feature?.geometry?.coordinates
+  if (!coordinates) {
+    return null
+  }
+
+  const pairs = []
+  collectCoordinatePairs(coordinates, pairs)
+
+  if (pairs.length === 0) {
+    return null
+  }
+
+  let lngSum = 0
+  let latSum = 0
+  pairs.forEach(([lng, lat]) => {
+    lngSum += lng
+    latSum += lat
+  })
+
+  return [lngSum / pairs.length, latSum / pairs.length]
+}
+
+function getFeaturePointOnFeatureCoordinate(feature) {
+  try {
+    const point = pointOnFeature(feature)
+    const [lng, lat] = point?.geometry?.coordinates || []
+    if (Number.isFinite(lng) && Number.isFinite(lat)) {
+      return [lng, lat]
+    }
+  } catch {
+    // Fall through to average-coordinate fallback.
+  }
+
+  return getFeatureAverageCoordinate(feature)
+}
+
+export function findNearestNode(buildingCoord, nodes) {
+  if (!(nodes instanceof Map) || !Array.isArray(buildingCoord)) {
+    return null
+  }
+
+  const [lng, lat] = buildingCoord
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null
+  }
+
+  let nearestNodeId = null
+  let minDistance = Number.POSITIVE_INFINITY
+
+  nodes.forEach((node, nodeId) => {
+    const nodeLat = Number.isFinite(node?.lat) ? node.lat : node?.coord?.[0]
+    const nodeLng = Number.isFinite(node?.lng) ? node.lng : node?.coord?.[1]
+    if (!Number.isFinite(nodeLat) || !Number.isFinite(nodeLng)) {
+      return
+    }
+
+    const distance = haversine({ lat, lng }, { lat: nodeLat, lng: nodeLng })
+    if (distance < minDistance) {
+      minDistance = distance
+      nearestNodeId = nodeId
+    }
+  })
+
+  return nearestNodeId
+}
+
+export function findNearestRoadNode(graph, buildingCoord, options = {}) {
+  const [lng, lat] = Array.isArray(buildingCoord) ? buildingCoord : []
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null
+  }
+
+  const allowedComponentIds = options?.allowedComponentIds
+  const shouldFilterByComponent =
+    allowedComponentIds instanceof Set && allowedComponentIds.size > 0
+
+  const configuredSnapRadius = Number.isFinite(options?.snapRadiusMeters)
+    ? Math.max(0, options.snapRadiusMeters)
+    : DEFAULT_SNAP_RADIUS_METERS
+
+  let nearestNodeId = null
+  let nearestDistance = Number.POSITIVE_INFINITY
+  let nearestWithinRadiusNodeId = null
+  let nearestWithinRadiusDistance = Number.POSITIVE_INFINITY
+  let nearestWithinRadiusDegree = -1
+
+  Object.entries(graph || {}).forEach(([nodeId, node]) => {
+    const [nodeLat, nodeLng] = node?.coord || []
+    if (!Number.isFinite(nodeLat) || !Number.isFinite(nodeLng)) {
+      return
+    }
+
+    if (shouldFilterByComponent && !allowedComponentIds.has(node.componentId)) {
+      return
+    }
+
+    const distance = haversine({ lat, lng }, { lat: nodeLat, lng: nodeLng })
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestNodeId = nodeId
+    }
+
+    if (configuredSnapRadius > 0 && distance <= configuredSnapRadius) {
+      const nodeDegree = Array.isArray(node?.neighbors) ? node.neighbors.length : 0
+      const isBetterDistance = distance < nearestWithinRadiusDistance - 0.001
+      const isSimilarDistance = Math.abs(distance - nearestWithinRadiusDistance) <= 2
+      const isBetterDegreeTieBreak = isSimilarDistance && nodeDegree > nearestWithinRadiusDegree
+
+      if (isBetterDistance || isBetterDegreeTieBreak) {
+        nearestWithinRadiusDistance = distance
+        nearestWithinRadiusNodeId = nodeId
+        nearestWithinRadiusDegree = nodeDegree
+      }
+    }
+  })
+
+  if (nearestWithinRadiusNodeId) {
+    return {
+      id: nearestWithinRadiusNodeId,
+      distance: nearestWithinRadiusDistance,
+    }
+  }
+
+  if (!nearestNodeId) {
+    return null
+  }
+
+  return {
+    id: nearestNodeId,
+    distance: nearestDistance,
+  }
+}
+
+function buildBuildingSnapIndex(buildingGeoJsonPayload, graph) {
+  const features = Array.isArray(buildingGeoJsonPayload?.features)
+    ? buildingGeoJsonPayload.features
+    : []
+  const snapIndex = new Map()
+
+  features.forEach((feature, index) => {
+    const snapSeedCoord = getFeaturePointOnFeatureCoordinate(feature)
+    if (!snapSeedCoord) {
+      return
+    }
+
+    const nearestRoadNode = findNearestRoadNode(graph, snapSeedCoord, {
+      snapRadiusMeters: BUILDING_SNAP_RADIUS_METERS,
+    })
+    if (!nearestRoadNode?.id) {
+      return
+    }
+
+    const rawId = String(feature?.properties?.id || "")
+    const rawName = String(feature?.properties?.name || "")
+    const fallbackId = `building_${index}`
+    const normalizedId = toCampusId(rawId || rawName || fallbackId)
+    const payload = {
+      id: nearestRoadNode.id,
+      distance: nearestRoadNode.distance,
+      coord: snapSeedCoord,
+    }
+
+    snapIndex.set(normalizedId, payload)
+    if (rawId) {
+      snapIndex.set(rawId, payload)
+    }
+    if (rawName) {
+      snapIndex.set(rawName, payload)
+    }
+  })
+
+  return snapIndex
+}
+
+export function getSnappedBuildingRoadNode(graph, buildingId, options = {}) {
+  if (!graph || !buildingId) {
+    return null
+  }
+
+  const snapIndex = buildingSnapIndexByGraph.get(graph)
+  if (!snapIndex) {
+    return null
+  }
+
+  const normalizedId = toCampusId(buildingId)
+  const snapEntry = snapIndex.get(normalizedId) || snapIndex.get(buildingId)
+  if (!snapEntry?.id) {
+    return null
+  }
+
+  const allowedComponentIds = options?.allowedComponentIds
+  const shouldFilterByComponent =
+    allowedComponentIds instanceof Set && allowedComponentIds.size > 0
+
+  if (!shouldFilterByComponent) {
+    return snapEntry
+  }
+
+  const componentId = graph[snapEntry.id]?.componentId
+  if (allowedComponentIds.has(componentId)) {
+    return snapEntry
+  }
+
+  return Array.isArray(snapEntry.coord)
+    ? findNearestRoadNode(graph, snapEntry.coord, options)
+    : null
+}
+
+export function getRoadGraphConnectivity(graph) {
+  const saved = roadGraphConnectivityByGraph.get(graph)
+  if (saved) {
+    return saved
+  }
+
+  const recalculated = testConnectivity(graph)
+  roadGraphConnectivityByGraph.set(graph, recalculated)
+  return recalculated
+}
+
+export function buildRoadPathGraph(roadGeoJsonPayload, buildingGeoJsonPayload = null, options = {}) {
+  const { nodes, adjacency, sourceStats } = buildRoadNodes(roadGeoJsonPayload)
+  const connectivity = testConnectivity(nodes)
+  const graph = buildGraphObject(nodes, adjacency, connectivity)
+  const buildingSnapIndex = buildBuildingSnapIndex(buildingGeoJsonPayload, graph)
+
+  roadGraphConnectivityByGraph.set(graph, connectivity)
+  buildingSnapIndexByGraph.set(graph, buildingSnapIndex)
+
+  if (sourceStats?.acceptedLineFeatureCount === 0) {
+    throw new Error("Road graph build failed: no LineString/MultiLineString features found in Roads.geojson.")
+  }
+
+  if (options?.logSourceSummary === true && sourceStats) {
+    console.info("[Routing] Road source filter:", {
+      totalFeatures: sourceStats.totalFeatures,
+      acceptedLineFeatures: sourceStats.acceptedLineFeatureCount,
+      ignoredNonLineFeatures: sourceStats.ignoredNonLineFeatureCount,
+      geometryTypes: sourceStats.geometryTypeCounts,
+    })
+  }
+
+  if (sourceStats?.ignoredNonLineFeatureCount > 0) {
     console.warn(
-      `Campus path graph has ${components.length} disconnected segments. ` +
-      "Routing is constrained to the active component."
+      `[Routing] Ignored ${sourceStats.ignoredNonLineFeatureCount} non-line features while building road graph.`
+    )
+  }
+
+  if (connectivity.total > 0 && connectivity.visited !== connectivity.total) {
+    console.warn(
+      `Campus path graph is fragmented: visited ${connectivity.visited} of ${connectivity.total} nodes.`
     )
   }
 
   return graph
+}
+
+export function summarizeRoadGraph(graph) {
+  const nodeIds = Object.keys(graph || {})
+  if (nodeIds.length === 0) {
+    return {
+      nodeCount: 0,
+      edgeCount: 0,
+      componentCount: 0,
+      minEdgeMeters: 0,
+      maxEdgeMeters: 0,
+      averageEdgeMeters: 0,
+    }
+  }
+
+  const seenEdges = new Set()
+  let totalDistance = 0
+  let minEdgeMeters = Number.POSITIVE_INFINITY
+  let maxEdgeMeters = 0
+
+  nodeIds.forEach((nodeId) => {
+    ;(graph[nodeId]?.neighbors || []).forEach(({ key: neighborId, dist }) => {
+      const edgeId = [nodeId, neighborId].sort().join("|")
+      if (seenEdges.has(edgeId)) {
+        return
+      }
+      seenEdges.add(edgeId)
+
+      if (!Number.isFinite(dist)) {
+        return
+      }
+      totalDistance += dist
+      minEdgeMeters = Math.min(minEdgeMeters, dist)
+      maxEdgeMeters = Math.max(maxEdgeMeters, dist)
+    })
+  })
+
+  const connectivity = getRoadGraphConnectivity(graph)
+  const edgeCount = seenEdges.size
+  const averageEdgeMeters = edgeCount > 0 ? totalDistance / edgeCount : 0
+
+  return {
+    nodeCount: nodeIds.length,
+    edgeCount,
+    componentCount: connectivity.componentCount,
+    minEdgeMeters: Number.isFinite(minEdgeMeters) ? minEdgeMeters : 0,
+    maxEdgeMeters,
+    averageEdgeMeters,
+  }
 }
 
 export function findNearestRoadProjection(graph, [targetLat, targetLng], options = {}) {
@@ -489,11 +655,11 @@ export function findNearestRoadProjection(graph, [targetLat, targetLng], options
     allowedComponentIds instanceof Set && allowedComponentIds.size > 0
 
   let nearestDistance = Number.POSITIVE_INFINITY
-  let best = null
+  let bestProjection = null
   const seenEdges = new Set()
 
-  Object.entries(graph || {}).forEach(([nodeKey, node]) => {
-    const [aLat, aLng] = node.coord || []
+  Object.entries(graph || {}).forEach(([nodeId, node]) => {
+    const [aLat, aLng] = node?.coord || []
     if (!Number.isFinite(aLat) || !Number.isFinite(aLng)) {
       return
     }
@@ -502,50 +668,55 @@ export function findNearestRoadProjection(graph, [targetLat, targetLng], options
       return
     }
 
-    ;(node.neighbors || []).forEach(({ key: neighborKey }) => {
-      const neighbor = graph[neighborKey]
-      if (!neighbor) {
+    ;(node.neighbors || []).forEach(({ key: neighborId }) => {
+      const neighborNode = graph[neighborId]
+      if (!neighborNode) {
         return
       }
 
-      if (shouldFilterByComponent && !allowedComponentIds.has(neighbor.componentId)) {
+      if (shouldFilterByComponent && !allowedComponentIds.has(neighborNode.componentId)) {
         return
       }
 
-      const edgeId = [nodeKey, neighborKey].sort().join("|")
+      const edgeId = [nodeId, neighborId].sort().join("|")
       if (seenEdges.has(edgeId)) {
         return
       }
       seenEdges.add(edgeId)
 
-      const [bLat, bLng] = neighbor.coord || []
+      const [bLat, bLng] = neighborNode.coord || []
       const projection = projectPointToSegment(targetLat, targetLng, aLat, aLng, bLat, bLng)
       if (!projection) {
         return
       }
 
-      const d = distanceMeters(targetLat, targetLng, projection.lat, projection.lng)
-      if (d < nearestDistance) {
-        nearestDistance = d
-        best = {
-          edgeStartKey: nodeKey,
-          edgeEndKey: neighborKey,
+      const candidateDistance = distanceMeters(
+        targetLat,
+        targetLng,
+        projection.lat,
+        projection.lng
+      )
+      if (candidateDistance < nearestDistance) {
+        nearestDistance = candidateDistance
+        bestProjection = {
+          edgeStartKey: nodeId,
+          edgeEndKey: neighborId,
           point: [projection.lat, projection.lng],
-          distance: d,
+          distance: candidateDistance,
           componentId: node.componentId,
         }
       }
     })
   })
 
-  return best
+  return bestProjection
 }
 
 export function injectProjectionNode(baseGraph, projection, tempKey) {
   const workingGraph = {}
 
-  Object.entries(baseGraph || {}).forEach(([nodeKey, node]) => {
-    workingGraph[nodeKey] = {
+  Object.entries(baseGraph || {}).forEach(([nodeId, node]) => {
+    workingGraph[nodeId] = {
       coord: Array.isArray(node.coord) ? [...node.coord] : node.coord,
       componentId: node.componentId,
       neighbors: Array.isArray(node.neighbors)
@@ -559,9 +730,8 @@ export function injectProjectionNode(baseGraph, projection, tempKey) {
   }
 
   const [projLat, projLng] = projection.point
-  const { edgeStartKey, edgeEndKey } = projection
-  const startNode = workingGraph[edgeStartKey]
-  const endNode = workingGraph[edgeEndKey]
+  const startNode = workingGraph[projection.edgeStartKey]
+  const endNode = workingGraph[projection.edgeEndKey]
 
   if (!startNode || !endNode) {
     return workingGraph
@@ -581,8 +751,8 @@ export function injectProjectionNode(baseGraph, projection, tempKey) {
   const distToEnd = distanceMeters(projLat, projLng, endNode.coord[0], endNode.coord[1])
 
   workingGraph[tempKey].neighbors.push(
-    { key: edgeStartKey, dist: distToStart },
-    { key: edgeEndKey, dist: distToEnd }
+    { key: projection.edgeStartKey, dist: distToStart },
+    { key: projection.edgeEndKey, dist: distToEnd }
   )
   startNode.neighbors.push({ key: tempKey, dist: distToStart })
   endNode.neighbors.push({ key: tempKey, dist: distToEnd })
@@ -599,6 +769,173 @@ function heuristicBetweenNodeKeys(graph, sourceKey, targetKey) {
   return distanceMeters(source.coord[0], source.coord[1], target.coord[0], target.coord[1])
 }
 
+class MinPriorityQueue {
+  constructor() {
+    this.heap = []
+  }
+
+  get size() {
+    return this.heap.length
+  }
+
+  push(priority, nodeKey) {
+    this.heap.push({ priority, nodeKey })
+    this.bubbleUp(this.heap.length - 1)
+  }
+
+  pop() {
+    if (this.heap.length === 0) {
+      return null
+    }
+
+    const head = this.heap[0]
+    const tail = this.heap.pop()
+
+    if (this.heap.length > 0 && tail) {
+      this.heap[0] = tail
+      this.bubbleDown(0)
+    }
+
+    return head
+  }
+
+  bubbleUp(startIndex) {
+    let currentIndex = startIndex
+
+    while (currentIndex > 0) {
+      const parentIndex = Math.floor((currentIndex - 1) / 2)
+      if (this.heap[parentIndex].priority <= this.heap[currentIndex].priority) {
+        return
+      }
+
+      ;[this.heap[parentIndex], this.heap[currentIndex]] = [
+        this.heap[currentIndex],
+        this.heap[parentIndex],
+      ]
+      currentIndex = parentIndex
+    }
+  }
+
+  bubbleDown(startIndex) {
+    let currentIndex = startIndex
+
+    while (true) {
+      const left = currentIndex * 2 + 1
+      const right = currentIndex * 2 + 2
+      let smallest = currentIndex
+
+      if (left < this.heap.length && this.heap[left].priority < this.heap[smallest].priority) {
+        smallest = left
+      }
+      if (right < this.heap.length && this.heap[right].priority < this.heap[smallest].priority) {
+        smallest = right
+      }
+
+      if (smallest === currentIndex) {
+        return
+      }
+
+      ;[this.heap[currentIndex], this.heap[smallest]] = [
+        this.heap[smallest],
+        this.heap[currentIndex],
+      ]
+      currentIndex = smallest
+    }
+  }
+}
+
+export function dijkstraRoadPathKeys(graph, startKey, endKey) {
+  if (!graph?.[startKey] || !graph?.[endKey]) {
+    return null
+  }
+
+  if (startKey === endKey) {
+    return [startKey]
+  }
+
+  const distances = {}
+  const previous = {}
+  const queue = new MinPriorityQueue()
+
+  Object.keys(graph).forEach((nodeId) => {
+    distances[nodeId] = Number.POSITIVE_INFINITY
+    previous[nodeId] = null
+  })
+
+  distances[startKey] = 0
+  queue.push(0, startKey)
+
+  while (queue.size > 0) {
+    const next = queue.pop()
+    if (!next) {
+      break
+    }
+
+    const { priority: currentDistance, nodeKey: currentNodeId } = next
+    if (currentDistance > distances[currentNodeId]) {
+      continue
+    }
+
+    if (currentNodeId === endKey) {
+      break
+    }
+
+    ;(graph[currentNodeId]?.neighbors || []).forEach(({ key: neighborId, dist }) => {
+      if (!graph[neighborId] || !Number.isFinite(dist)) {
+        return
+      }
+
+      const tentativeDistance = currentDistance + dist
+      if (tentativeDistance >= distances[neighborId]) {
+        return
+      }
+
+      distances[neighborId] = tentativeDistance
+      previous[neighborId] = currentNodeId
+      queue.push(tentativeDistance, neighborId)
+    })
+  }
+
+  if (!Number.isFinite(distances[endKey]) || distances[endKey] === Number.POSITIVE_INFINITY) {
+    return null
+  }
+
+  const path = []
+  let cursor = endKey
+  while (cursor) {
+    path.unshift(cursor)
+    if (cursor === startKey) {
+      break
+    }
+    cursor = previous[cursor]
+  }
+
+  return path[0] === startKey ? path : null
+}
+
+export function dijkstraRoadPath(graph, startKey, endKey) {
+  const pathKeys = dijkstraRoadPathKeys(graph, startKey, endKey)
+  if (!pathKeys) {
+    return null
+  }
+  return pathKeys.map((nodeKey) => graph[nodeKey].coord)
+}
+
+export function pathLengthFromCoordinates(pathCoordinates) {
+  if (!Array.isArray(pathCoordinates) || pathCoordinates.length < 2) {
+    return 0
+  }
+
+  let total = 0
+  for (let index = 0; index < pathCoordinates.length - 1; index += 1) {
+    const from = pathCoordinates[index]
+    const to = pathCoordinates[index + 1]
+    total += distanceMeters(from[0], from[1], to[0], to[1])
+  }
+
+  return total
+}
+
 export function astarRoadPath(graph, startKey, endKey) {
   if (!graph?.[startKey] || !graph?.[endKey]) {
     return null
@@ -613,33 +950,33 @@ export function astarRoadPath(graph, startKey, endKey) {
   const gScore = {}
   const fScore = {}
 
-  function pickLowestScoreNode() {
-    let bestNode = null
-    openSet.forEach((nodeKey) => {
-      if (bestNode === null || fScore[nodeKey] < fScore[bestNode]) {
-        bestNode = nodeKey
-      }
-    })
-    return bestNode
-  }
-
-  Object.keys(graph).forEach((nodeKey) => {
-    gScore[nodeKey] = Number.POSITIVE_INFINITY
-    fScore[nodeKey] = Number.POSITIVE_INFINITY
+  Object.keys(graph).forEach((nodeId) => {
+    gScore[nodeId] = Number.POSITIVE_INFINITY
+    fScore[nodeId] = Number.POSITIVE_INFINITY
   })
 
   gScore[startKey] = 0
   fScore[startKey] = heuristicBetweenNodeKeys(graph, startKey, endKey)
 
+  function pickLowestScoreNode() {
+    let bestNodeId = null
+    openSet.forEach((nodeId) => {
+      if (bestNodeId === null || fScore[nodeId] < fScore[bestNodeId]) {
+        bestNodeId = nodeId
+      }
+    })
+    return bestNodeId
+  }
+
   while (openSet.size > 0) {
-    const currentKey = pickLowestScoreNode()
-    if (!currentKey) {
+    const currentNodeId = pickLowestScoreNode()
+    if (!currentNodeId) {
       return null
     }
 
-    if (currentKey === endKey) {
-      const pathKeys = [currentKey]
-      let cursor = currentKey
+    if (currentNodeId === endKey) {
+      const pathKeys = [currentNodeId]
+      let cursor = currentNodeId
       while (cameFrom[cursor]) {
         cursor = cameFrom[cursor]
         pathKeys.unshift(cursor)
@@ -647,24 +984,23 @@ export function astarRoadPath(graph, startKey, endKey) {
       return pathKeys.map((nodeKey) => graph[nodeKey].coord)
     }
 
-    openSet.delete(currentKey)
-    const currentDistance = gScore[currentKey]
-    const neighbors = graph[currentKey]?.neighbors || []
+    openSet.delete(currentNodeId)
+    const currentDistance = gScore[currentNodeId]
 
-    neighbors.forEach(({ key: neighborKey, dist }) => {
-      if (!graph[neighborKey] || !Number.isFinite(dist)) {
+    ;(graph[currentNodeId]?.neighbors || []).forEach(({ key: neighborId, dist }) => {
+      if (!graph[neighborId] || !Number.isFinite(dist)) {
         return
       }
 
       const tentativeScore = currentDistance + dist
-      if (tentativeScore >= gScore[neighborKey]) {
+      if (tentativeScore >= gScore[neighborId]) {
         return
       }
 
-      cameFrom[neighborKey] = currentKey
-      gScore[neighborKey] = tentativeScore
-      fScore[neighborKey] = tentativeScore + heuristicBetweenNodeKeys(graph, neighborKey, endKey)
-      openSet.add(neighborKey)
+      cameFrom[neighborId] = currentNodeId
+      gScore[neighborId] = tentativeScore
+      fScore[neighborId] = tentativeScore + heuristicBetweenNodeKeys(graph, neighborId, endKey)
+      openSet.add(neighborId)
     })
   }
 

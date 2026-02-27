@@ -4,7 +4,6 @@ import "leaflet/dist/leaflet.css"
 import "leaflet.markercluster"
 import "leaflet.markercluster/dist/MarkerCluster.css"
 import "leaflet.markercluster/dist/MarkerCluster.Default.css"
-import { campusClassrooms } from "../data/campusData"
 import { dijkstra, calculatePathDistance } from "../navigation/dijkstra"
 import { buildConstrainedGraph } from "../navigation/graphConstraints"
 import { generateInstructions } from "../navigation/generateInstructions"
@@ -153,19 +152,6 @@ function MapView({ onReady }) {
     [graphData]
   )
   const hasGraphData = Object.keys(nodesLookup).length > 0
-
-  const occupancyByNodeId = useMemo(() => {
-    return Object.fromEntries(
-      campusClassrooms.map((room) => [
-        room.id,
-        {
-          currentOccupancy: room.currentOccupancy,
-          capacity: room.capacity,
-          available: room.currentOccupancy / room.capacity < 0.8,
-        },
-      ])
-    )
-  }, [])
 
   const roomNodes = useMemo(() => {
     return Object.entries(nodesLookup)
@@ -696,12 +682,11 @@ function MapView({ onReady }) {
         return
       }
 
-      const roomStatus = occupancyByNodeId[nodeId]
       let color = "#FF6A00"
       let radius = 6
 
       if (node.kind === "room") {
-        color = roomStatus?.available ? "#1ED760" : "#FF3B30"
+        color = "#F59E0B"
         radius = 7
       } else if (node.connectorType === "elevator") {
         color = "#2979FF"
@@ -715,10 +700,7 @@ function MapView({ onReady }) {
         fillOpacity: 0.85,
       })
 
-      const occupancyText =
-        node.kind === "room" && roomStatus
-          ? `<br/>${roomStatus.currentOccupancy}/${roomStatus.capacity} occupied`
-          : ""
+      const occupancyText = ""
 
       marker.bindPopup(
         `<strong>${node.name}</strong><br/>${node.building} - Floor ${node.floor}${occupancyText}`
@@ -730,7 +712,7 @@ function MapView({ onReady }) {
 
       markerClusterLayer.addLayer(marker)
     })
-  }, [activeFloor, constrainedGraphForView, handleNodeClick, nodesLookup, occupancyByNodeId])
+  }, [activeFloor, constrainedGraphForView, handleNodeClick, nodesLookup])
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true)

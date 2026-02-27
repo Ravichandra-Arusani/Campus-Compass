@@ -25,14 +25,35 @@ class BuildingSerializer(serializers.ModelSerializer):
 
 
 class RoomAvailabilitySerializer(serializers.ModelSerializer):
+    building = serializers.CharField(source="building.name", read_only=True)
+    floor = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
     available = serializers.SerializerMethodField()
 
     class Meta:
         model = Room
-        fields = ("name", "capacity", "current_occupancy", "available")
+        fields = (
+            "id",
+            "name",
+            "type",
+            "building",
+            "floor",
+            "capacity",
+            "current_occupancy",
+            "is_available",
+            "available",
+        )
+
+    def get_floor(self, obj):
+        return None
+
+    def get_is_available(self, obj):
+        if not obj.capacity:
+            return True
+        return obj.current_occupancy < obj.capacity
 
     def get_available(self, obj):
-        return obj.current_occupancy < obj.capacity
+        return self.get_is_available(obj)
 
 
 class NodeSerializer(serializers.ModelSerializer):

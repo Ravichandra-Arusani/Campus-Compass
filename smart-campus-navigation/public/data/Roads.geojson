@@ -1,0 +1,99 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "west_spine"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721155, 17.469818],
+        [78.721210, 17.470052],
+        [78.721254, 17.470589],
+        [78.721324, 17.471149],
+        [78.721354, 17.471707]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "north_road"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721354, 17.471707],
+        [78.721702, 17.471664],
+        [78.722065, 17.471614],
+        [78.721950, 17.471285]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "central_road"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721254, 17.470589],
+        [78.721627, 17.470535],
+        [78.722185, 17.470522],
+        [78.722900, 17.470500],
+        [78.723397, 17.470937],
+        [78.723526, 17.471006],
+        [78.723600, 17.470979],
+        [78.723860, 17.470596]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "south_road"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721155, 17.469750],
+        [78.721433, 17.469720],
+        [78.721543, 17.469700],
+        [78.722006, 17.469650],
+        [78.722393, 17.469610],
+        [78.722774, 17.469570],
+        [78.723167, 17.469520],
+        [78.723300, 17.469560],
+        [78.723239, 17.469650]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "west_south_connector"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721155, 17.469818],
+        [78.721155, 17.469750]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "connector_mid"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721543, 17.469700],
+        [78.721543, 17.469892],
+        [78.721627, 17.470535]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "connector_north_mid"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.721324, 17.471149],
+        [78.721730, 17.471185],
+        [78.721702, 17.471664]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "east_perimeter"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.723239, 17.469650],
+        [78.723300, 17.469560],
+        [78.723397, 17.470937]
+      ]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "ground_south_connector"},
+      "geometry": {"type": "LineString", "coordinates": [
+        [78.722185, 17.470522],
+        [78.722185, 17.470100],
+        [78.722006, 17.469650]
+      ]}
+    }
+  ]
+}

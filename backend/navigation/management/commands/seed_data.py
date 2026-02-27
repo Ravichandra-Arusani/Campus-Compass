@@ -75,20 +75,49 @@ class Command(BaseCommand):
             )
 
         rooms_by_building = {
-            "Library": [("L101", 80, 26), ("L204", 40, 35), ("L310", 30, 18)],
-            "Engineering": [("E201", 60, 22), ("E305", 45, 38), ("E408", 35, 12)],
-            "Innovation": [("I110", 55, 16), ("I220", 25, 25), ("I405", 40, 19)],
-            "Student Hub": [("S102", 100, 71), ("S208", 35, 14), ("S315", 50, 33)],
-            "Medical": [("M120", 45, 41), ("M211", 30, 12), ("M330", 20, 8)],
-            "Sports": [("SP1", 120, 68), ("SP2", 80, 75), ("SP3", 40, 17)],
-            "Admin": [("A101", 30, 21), ("A210", 22, 9), ("A330", 18, 13)],
+            "Library": [
+                ("L101", 80, 26, Room.RoomType.CLASSROOM),
+                ("L204", 40, 35, Room.RoomType.LAB),
+                ("L310", 30, 18, Room.RoomType.AUDITORIUM),
+            ],
+            "Engineering": [
+                ("E201", 60, 22, Room.RoomType.CLASSROOM),
+                ("E305", 45, 38, Room.RoomType.LAB),
+                ("E408", 35, 12, Room.RoomType.LAB),
+            ],
+            "Innovation": [
+                ("I110", 55, 16, Room.RoomType.CLASSROOM),
+                ("I220", 25, 25, Room.RoomType.LAB),
+                ("I405", 40, 19, Room.RoomType.LAB),
+            ],
+            "Student Hub": [
+                ("S102", 100, 71, Room.RoomType.AUDITORIUM),
+                ("S208", 35, 14, Room.RoomType.CLASSROOM),
+                ("S315", 50, 33, Room.RoomType.CLASSROOM),
+            ],
+            "Medical": [
+                ("M120", 45, 41, Room.RoomType.CLASSROOM),
+                ("M211", 30, 12, Room.RoomType.LAB),
+                ("M330", 20, 8, Room.RoomType.LAB),
+            ],
+            "Sports": [
+                ("SP1", 120, 68, Room.RoomType.AUDITORIUM),
+                ("SP2", 80, 75, Room.RoomType.AUDITORIUM),
+                ("SP3", 40, 17, Room.RoomType.CLASSROOM),
+            ],
+            "Admin": [
+                ("A101", 30, 21, Room.RoomType.CLASSROOM),
+                ("A210", 22, 9, Room.RoomType.CLASSROOM),
+                ("A330", 18, 13, Room.RoomType.LAB),
+            ],
         }
 
         for building_name, room_data in rooms_by_building.items():
-            for room_name, capacity, occupancy in room_data:
+            for room_name, capacity, occupancy, room_type in room_data:
                 Room.objects.create(
                     building=building_map[building_name],
                     name=room_name,
+                    type=room_type,
                     capacity=capacity,
                     current_occupancy=occupancy,
                 )
