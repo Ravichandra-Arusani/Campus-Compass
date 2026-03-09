@@ -1,0 +1,11 @@
+﻿ 152:             prev = k
+ 153:         })
+ 154:     })
+ 155:     console.log(`Removed ${removedEdges} edges. Blockers:`, Array.from(blockers))
+ 156:     return { nodes, edges }
+ 157: }
+ 158: function snapToGraph(graph, lat, lng, maxSnapMeters = GRAPH_SNAP_MAX_METERS) {
+ 159:     let bk = null
+ 160:     let bd = Infinity
+ 161:     Object.entries(graph.nodes).forEach(([k, n]) => {
+ 162:         const d = haversineM(lat, lng, n.lat, n.lng)

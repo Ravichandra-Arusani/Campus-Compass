@@ -58,6 +58,25 @@ function CinematicLanding() {
   }, [])
 
   useEffect(() => {
+    const handleRouteState = (e) => {
+      if (!vantaRef.current) return
+
+      if (e.detail?.active) {
+        if (typeof vantaRef.current.pause === "function") {
+          vantaRef.current.pause()
+        }
+      } else {
+        if (typeof vantaRef.current.play === "function") {
+          vantaRef.current.play()
+        }
+      }
+    }
+
+    window.addEventListener("smart-nav:route-state", handleRouteState)
+    return () => window.removeEventListener("smart-nav:route-state", handleRouteState)
+  }, [])
+
+  useEffect(() => {
     if (!sectionRef.current) {
       return undefined
     }

@@ -130,6 +130,9 @@
     }
 
     const MIN_ROAD_EDGE_METERS = 1.6
+    const MAX_SNAP_DISTANCE_METERS = 25
+    const EDGE_BLOCK_SAMPLE_COUNT = 8
+    const POLYGON_EPSILON = 1e-10
     const DESTINATION_HINTS = {
       "pratham": [17.46957, 78.722774],
       "prathibha": [17.46961, 78.722393],
@@ -165,6 +168,105 @@
       return 2 * 6371000 * Math.atan2(Math.sqrt(hav), Math.sqrt(1 - hav))
     }
 
+    function normalizeRing(ring) {
+      if (!Array.isArray(ring)) return []
+      return ring
+        .filter((pair) => Array.isArray(pair) && Number.isFinite(pair[0]) && Number.isFinite(pair[1]))
+        .map(([lng, lat]) => [Number(lng), Number(lat)])
+    }
+
+    function extractBlockedPolygons(geojson) {
+      const blockedPolygons = []
+      ;(geojson?.features || []).forEach((feature) => {
+        const geometry = feature?.geometry
+        if (!geometry) return
+
+        if (geometry.type === "Polygon" && Array.isArray(geometry.coordinates)) {
+          const rings = geometry.coordinates.map((ring) => normalizeRing(ring)).filter((ring) => ring.length >= 3)
+          if (rings.length > 0) blockedPolygons.push(rings)
+          return
+        }
+
+        if (geometry.type === "MultiPolygon" && Array.isArray(geometry.coordinates)) {
+          geometry.coordinates.forEach((polygonRings) => {
+            const rings = Array.isArray(polygonRings)
+              ? polygonRings.map((ring) => normalizeRing(ring)).filter((ring) => ring.length >= 3)
+              : []
+            if (rings.length > 0) blockedPolygons.push(rings)
+          })
+        }
+      })
+      return blockedPolygons
+    }
+
+    function isPointOnSegment(pointLng, pointLat, a, b) {
+      const [aLng, aLat] = a
+      const [bLng, bLat] = b
+      const cross = (pointLat - aLat) * (bLng - aLng) - (pointLng - aLng) * (bLat - aLat)
+      if (Math.abs(cross) > POLYGON_EPSILON) return false
+
+      const minLng = Math.min(aLng, bLng) - POLYGON_EPSILON
+      const maxLng = Math.max(aLng, bLng) + POLYGON_EPSILON
+      const minLat = Math.min(aLat, bLat) - POLYGON_EPSILON
+      const maxLat = Math.max(aLat, bLat) + POLYGON_EPSILON
+      return pointLng >= minLng && pointLng <= maxLng && pointLat >= minLat && pointLat <= maxLat
+    }
+
+    function isPointOnRingBoundary(pointLng, pointLat, ring) {
+      for (let i = 0; i < ring.length; i += 1) {
+        const a = ring[i]
+        const b = ring[(i + 1) % ring.length]
+        if (isPointOnSegment(pointLng, pointLat, a, b)) return true
+      }
+      return false
+    }
+
+    function isPointInRing(pointLng, pointLat, ring) {
+      let inside = false
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+        const [lngI, latI] = ring[i]
+        const [lngJ, latJ] = ring[j]
+        const intersects = ((latI > pointLat) !== (latJ > pointLat))
+          && (pointLng < ((lngJ - lngI) * (pointLat - latI)) / ((latJ - latI) || Number.EPSILON) + lngI)
+        if (intersects) inside = !inside
+      }
+      return inside
+    }
+
+    function isPointInsidePolygonInterior(pointLng, pointLat, polygonRings) {
+      if (!Array.isArray(polygonRings) || polygonRings.length === 0) return false
+      const outerRing = polygonRings[0]
+      if (!Array.isArray(outerRing) || outerRing.length < 3) return false
+      if (isPointOnRingBoundary(pointLng, pointLat, outerRing)) return false
+      if (!isPointInRing(pointLng, pointLat, outerRing)) return false
+
+      for (let i = 1; i < polygonRings.length; i += 1) {
+        const holeRing = polygonRings[i]
+        if (!Array.isArray(holeRing) || holeRing.length < 3) continue
+        if (isPointOnRingBoundary(pointLng, pointLat, holeRing)) return false
+        if (isPointInRing(pointLng, pointLat, holeRing)) return false
+      }
+      return true
+    }
+
+    function segmentCrossesBlockedPolygon(aNode, bNode, blockedPolygons) {
+      if (!Array.isArray(blockedPolygons) || blockedPolygons.length === 0) return false
+
+      const deltaLat = bNode.lat - aNode.lat
+      const deltaLng = bNode.lng - aNode.lng
+      for (const polygonRings of blockedPolygons) {
+        for (let i = 1; i < EDGE_BLOCK_SAMPLE_COUNT; i += 1) {
+          const ratio = i / EDGE_BLOCK_SAMPLE_COUNT
+          const sampleLat = aNode.lat + deltaLat * ratio
+          const sampleLng = aNode.lng + deltaLng * ratio
+          if (isPointInsidePolygonInterior(sampleLng, sampleLat, polygonRings)) {
+            return true
+          }
+        }
+      }
+      return false
+    }
+
     function normalizeLngLat(coord) {
       if (!Array.isArray(coord) || coord.length < 2) return null
       const lng = Number(coord[0])
@@ -190,9 +292,10 @@
       return lines
     }
 
-    function buildRoadGraph(geojson) {
+    function buildRoadGraph(geojson, blockedGeojson = null) {
       const nodes = {}
       const adjacency = {}
+      const blockedPolygons = extractBlockedPolygons(blockedGeojson)
 
       function ensureNode(coord) {
         const normalized = normalizeLngLat(coord)
@@ -211,6 +314,7 @@
         const a = nodes[aKey]
         const b = nodes[bKey]
         if (!a || !b) return
+        if (segmentCrossesBlockedPolygon(a, b, blockedPolygons)) return
         const edgeDistance = distanceMeters(a.lat, a.lng, b.lat, b.lng)
         if (!Number.isFinite(edgeDistance) || edgeDistance < MIN_ROAD_EDGE_METERS) return
 
@@ -236,7 +340,7 @@
       return nodes
     }
 
-    function nearestNode(graph, lat, lng) {
+    function nearestNode(graph, lat, lng, maxSnapDistanceMeters = MAX_SNAP_DISTANCE_METERS) {
       let nearestId = null
       let nearestDistance = Number.POSITIVE_INFINITY
       Object.keys(graph).forEach((id) => {
@@ -247,7 +351,10 @@
           nearestId = id
         }
       })
-      return nearestId ? { id: nearestId, distance: nearestDistance } : null
+      if (!nearestId || !Number.isFinite(nearestDistance) || nearestDistance > maxSnapDistanceMeters) {
+        return null
+      }
+      return { id: nearestId, distance: nearestDistance }
     }
 
     function dijkstraPath(graph, startId, endId) {
@@ -419,7 +526,7 @@
       map.fitBounds(buildingLayer.getBounds(), { padding: [30, 30], maxZoom: 19 })
     }
 
-    const roadGraph = buildRoadGraph(ROADS_GEOJSON)
+    const roadGraph = buildRoadGraph(ROADS_GEOJSON, CAMPUS_GEOJSON)
     const destinationItems = []
     const destinationSeen = new Set()
 

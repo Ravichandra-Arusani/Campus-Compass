@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react"
+import Fuse from "fuse.js"
 
 function buildSearchText(option) {
   if (!option) {
@@ -33,19 +34,28 @@ function DestinationSearch({
     return options.find((option) => option.id === value) || null
   }, [options, value])
 
+  const fuse = useMemo(() => {
+    return new Fuse(options, {
+      keys: ["label", "searchText"],
+      threshold: 0.3, // 0.0 is exact match, 1.0 is match anything. 0.3 handles typos well.
+      ignoreLocation: true,
+    })
+  }, [options])
+
   const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
+    const normalizedQuery = query.trim()
     if (!normalizedQuery) {
       return options
     }
 
-    return options.filter((option) => buildSearchText(option).includes(normalizedQuery))
-  }, [options, query])
+    return fuse.search(normalizedQuery).map(result => result.item)
+  }, [options, query, fuse])
 
   function getActiveIndexForQuery(nextQuery, selectedValue = value) {
-    const normalizedQuery = nextQuery.trim().toLowerCase()
+    const normalizedQuery = nextQuery.trim()
+
     const nextFilteredOptions = normalizedQuery
-      ? options.filter((option) => buildSearchText(option).includes(normalizedQuery))
+      ? fuse.search(normalizedQuery).map(result => result.item)
       : options
 
     if (nextFilteredOptions.length === 0) {

@@ -1,0 +1,72 @@
+[
+  {
+    "dest": "Nirmithi Block",
+    "status": "Reachable",
+    "distance": 11.164391924103489
+  },
+  {
+    "dest": "Srujan Block",
+    "status": "Reachable",
+    "distance": 0.055075304129647076
+  },
+  {
+    "dest": "Aakash Block",
+    "status": "Reachable",
+    "distance": 8.936045595733361
+  },
+  {
+    "dest": "Avishkar Block",
+    "status": "Reachable",
+    "distance": 26.998892038394878
+  },
+  {
+    "dest": "Pratham Block",
+    "status": "Reachable",
+    "distance": 20.235904321400493
+  },
+  {
+    "dest": "Prathibha Block",
+    "status": "Reachable",
+    "distance": 20.496473271887233
+  },
+  {
+    "dest": "New Block",
+    "status": "Reachable",
+    "distance": 14.603233049882249
+  },
+  {
+    "dest": "Library",
+    "status": "Reachable",
+    "distance": 16.334202575756436
+  },
+  {
+    "dest": "Nalanda Auditorium",
+    "status": "Reachable",
+    "distance": 29.216479008743775
+  },
+  {
+    "dest": "Boys Hostel",
+    "status": "Reachable",
+    "distance": 30.467421439444628
+  },
+  {
+    "dest": "Girls Hostel",
+    "status": "Reachable",
+    "distance": 29.38325936551222
+  },
+  {
+    "dest": "VBIT Parking",
+    "status": "Reachable",
+    "distance": 0.029938474587887023
+  },
+  {
+    "dest": "VBIT Ground",
+    "status": "Reachable",
+    "distance": 0.03882094801962748
+  },
+  {
+    "dest": "Canteen",
+    "status": "Reachable",
+    "distance": 9.396008717749798
+  }
+]

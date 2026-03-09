@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { campusBlueprint } from "../data/campusBlueprint"
 
 const ROOM_TYPE_LABELS = {
   ALL: "All Types",
@@ -29,16 +30,75 @@ export default function RoomAvailability() {
       setError("")
 
       try {
-        const query = selectedType === "ALL" ? "" : `?type=${encodeURIComponent(selectedType)}`
-        const response = await fetch(`/api/rooms/available/${query}`)
-        if (!response.ok) {
-          throw new Error("Failed to load room availability.")
-        }
-        const payload = await response.json()
-        console.debug("[RoomAvailability] API response:", payload)
+        // Mocking API delay
+        await new Promise(resolve => setTimeout(resolve, 600))
         if (ignore) return
 
-        const nextRooms = Array.isArray(payload) ? payload : []
+        let allRooms = []
+        campusBlueprint.forEach(building => {
+          if (building.type === "academic" || building.type === "service") {
+            // Add auditoriums explicitly as rooms
+            if (building.capacity) {
+              allRooms.push({
+                id: building.id,
+                name: building.name,
+                building: building.name,
+                type: "Auditorium",
+                capacity: building.capacity,
+                currentOccupancy: building.capacity ? Math.floor(Math.random() * building.capacity) : 0,
+                floor: building.floors || 1
+              })
+            }
+
+            // Check name for seminar halls
+            if (building.name.toLowerCase().includes("seminar hall")) {
+              const cap = 100
+              allRooms.push({
+                id: building.id,
+                name: building.name,
+                building: building.name,
+                type: "Auditorium", // Map to auditorium so it fits a clear category
+                capacity: cap,
+                currentOccupancy: Math.floor(Math.random() * cap),
+                floor: building.floors || 1
+              })
+            }
+
+            // Create mock classrooms/labs for academic blocks
+            if (building.type === "academic" && building.departments?.length > 0) {
+              building.departments.forEach((dept, idx) => {
+                const cap = 60
+                allRooms.push({
+                  id: `${building.id}_room_${idx}`,
+                  name: `${dept} Classroom ${idx + 1}`,
+                  building: building.name,
+                  type: "Classroom",
+                  capacity: cap,
+                  currentOccupancy: Math.floor(Math.random() * cap),
+                  floor: (idx % (building.floors || 1)) + 1
+                })
+
+                const labCap = 30
+                allRooms.push({
+                  id: `${building.id}_lab_${idx}`,
+                  name: `${dept} Lab`,
+                  building: building.name,
+                  type: "Lab",
+                  capacity: labCap,
+                  currentOccupancy: Math.floor(Math.random() * labCap),
+                  floor: (idx % (building.floors || 1)) + 1
+                })
+              })
+            }
+          }
+        })
+
+        let filteredRooms = allRooms
+        if (selectedType !== "ALL") {
+          filteredRooms = allRooms.filter(r => r.type.toUpperCase() === selectedType.toUpperCase())
+        }
+
+        const nextRooms = filteredRooms
         setRooms(nextRooms)
 
         if (nextRooms.length > 0) {
@@ -88,8 +148,8 @@ export default function RoomAvailability() {
   const occupancyRatio = capacity > 0 ? currentOccupancy / capacity : 0
   const isAvailable = Boolean(
     activeRoom?.is_available ??
-      activeRoom?.available ??
-      (capacity > 0 ? currentOccupancy < capacity : true)
+    activeRoom?.available ??
+    (capacity > 0 ? currentOccupancy < capacity : true)
   )
   const roomType = (activeRoom?.type || "").toString().toLowerCase()
   const roomFloor = activeRoom?.floor

@@ -348,6 +348,17 @@ body {
   display: none;
 }
 
+.building-photo-tooltip .leaflet-tooltip {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.building-photo-tooltip::before {
+  display: none !important;
+}
+
 .custom-zoom-control {
   display: flex;
   flex-direction: column;
