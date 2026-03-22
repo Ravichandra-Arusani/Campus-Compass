@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import L from "leaflet"
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png"
-import markerIcon from "leaflet/dist/images/marker-icon.png"
-import markerShadow from "leaflet/dist/images/marker-shadow.png"
+import bezierSpline from "@turf/bezier-spline"
+import maplibregl from "maplibre-gl"
+import "maplibre-gl/dist/maplibre-gl.css"
+import booleanPointInPolygon from "@turf/boolean-point-in-polygon"
 import { campusBlueprint, campusBlueprintById } from "../data/campusBlueprint"
 import { BUILDING_ENTRANCES } from "../data/buildingEntrances"
 import {
-  CAMPUS_GRAPH_ADJACENCY,
-  CAMPUS_GRAPH_NODES,
+  buildSimpleGraph,
   buildCampusGraphFromGeoJson,
   dijkstra as campusGraphDijkstra,
   snapToNearestNode,
 } from "../outdoor/campusGraph"
 import DestinationSearch from "./DestinationSearch"
+import apiClient from "../services/apiClient"
 
 const LANDMARK_BUILDINGS = {
   "Srujan Block": {
@@ -37,199 +37,7 @@ const LANDMARK_BUILDINGS = {
   }
 };
 
-function haversineM(lat1, lng1, lat2, lng2) {
-  const R = 6371000
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLng = (lng2 - lng1) * Math.PI / 180
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-const GRAPH_SNAP_MAX_METERS = 40
-
-const EDGE_BLOCK_SAMPLE_COUNT = 8
-
-function isPointOnSegment(pointLng, pointLat, a, b) {
-  const [aLng, aLat] = a
-  const [bLng, bLat] = b
-  const cross = (pointLat - aLat) * (bLng - aLng) - (pointLng - aLng) * (bLat - aLat)
-  if (Math.abs(cross) > 1e-10) return false
-
-  const minLng = Math.min(aLng, bLng) - 1e-10
-  const maxLng = Math.max(aLng, bLng) + 1e-10
-  const minLat = Math.min(aLat, bLat) - 1e-10
-  const maxLat = Math.max(aLat, bLat) + 1e-10
-  return pointLng >= minLng && pointLng <= maxLng && pointLat >= minLat && pointLat <= maxLat
-}
-
-function isPointInRing(pointLng, pointLat, ring) {
-  let inside = false
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const [lngI, latI] = ring[i]
-    const [lngJ, latJ] = ring[j]
-    const intersects = ((latI > pointLat) !== (latJ > pointLat))
-      && (pointLng < ((lngJ - lngI) * (pointLat - latI)) / ((latJ - latI) || Number.EPSILON) + lngI)
-    if (intersects) inside = !inside
-  }
-  return inside
-}
-
-function isPointOnRingBoundary(pointLng, pointLat, ring) {
-  for (let i = 0; i < ring.length; i += 1) {
-    const a = ring[i]
-    const b = ring[(i + 1) % ring.length]
-    if (isPointOnSegment(pointLng, pointLat, a, b)) return true
-  }
-  return false
-}
-
-function isPointInsidePolygonInterior(pointLng, pointLat, polygonRings) {
-  if (!Array.isArray(polygonRings) || polygonRings.length === 0) return false
-  const outerRing = polygonRings[0]
-  if (!Array.isArray(outerRing) || outerRing.length < 3) return false
-  if (isPointOnRingBoundary(pointLng, pointLat, outerRing)) return false
-  if (!isPointInRing(pointLng, pointLat, outerRing)) return false
-
-  for (let i = 1; i < polygonRings.length; i += 1) {
-    const holeRing = polygonRings[i]
-    if (!Array.isArray(holeRing) || holeRing.length < 3) continue
-    if (isPointOnRingBoundary(pointLng, pointLat, holeRing)) return false
-    if (isPointInRing(pointLng, pointLat, holeRing)) return false
-  }
-  return true
-}
-
-function normalizeRing(ring) {
-  if (!Array.isArray(ring)) return []
-  return ring
-    .filter((pair) => Array.isArray(pair) && Number.isFinite(pair[0]) && Number.isFinite(pair[1]))
-    .map(([lng, lat]) => [Number(lng), Number(lat)])
-}
-
-function extractBlockedPolygons(footprintsGeojson) {
-  const blockedPolygons = []
-    ; (footprintsGeojson?.features || []).forEach((feature) => {
-      const geometry = feature?.geometry
-      if (!geometry) return
-
-      if (geometry.type === "Polygon" && Array.isArray(geometry.coordinates)) {
-        const rings = geometry.coordinates.map((ring) => normalizeRing(ring)).filter((ring) => ring.length >= 3)
-        if (rings.length > 0) blockedPolygons.push({ props: feature.properties, rings })
-      }
-    })
-  return blockedPolygons
-}
-
-function segmentCrossesBlockedPolygon(a, b, blockedPolygons) {
-  const deltaLat = b.lat - a.lat
-  const deltaLng = b.lng - a.lng
-
-  for (const poly of blockedPolygons) {
-    const polygonRings = poly.rings
-    let interiorPointsCount = 0
-    // Use inner samples to avoid endpoints triggering false positives that just touch boundaries
-    for (let i = 1; i < EDGE_BLOCK_SAMPLE_COUNT; i += 1) {
-      const ratio = i / EDGE_BLOCK_SAMPLE_COUNT
-      const sampleLat = a.lat + deltaLat * ratio
-      const sampleLng = a.lng + deltaLng * ratio
-      if (isPointInsidePolygonInterior(sampleLng, sampleLat, polygonRings)) {
-        interiorPointsCount += 1
-      }
-    }
-    // Block only if significant part of segment is inside polygon
-    if (interiorPointsCount >= 2) {
-      return true
-    }
-  }
-  return false
-}
-
-function buildGraph(roadsGeojson, footprintsGeojson = null) {
-  const nodes = {}
-  const edges = {}
-  const blockedPolygons = extractBlockedPolygons(footprintsGeojson)
-  function key(lat, lng) { return `${lat.toFixed(5)}|${lng.toFixed(5)}` }
-  function ensure(lat, lng) {
-    const k = key(lat, lng)
-    if (!nodes[k]) nodes[k] = { lat, lng }
-    if (!edges[k]) edges[k] = []
-    return k
-  }
-  console.log("Road features:", roadsGeojson.features.length)
-  let removedEdges = 0
-  let blockers = new Set()
-
-  function addEdge(kA, kB) {
-    if (kA === kB) return
-    const a = nodes[kA]
-    const b = nodes[kB]
-    if (!a || !b) return
-    const crossers = segmentCrossesBlockedPolygon(a, b, blockedPolygons)
-    if (crossers.length > 0) {
-      removedEdges++
-      crossers.forEach(c => blockers.add(c))
-      // return
-    }
-    const d = haversineM(a.lat, a.lng, b.lat, b.lng)
-    if (!edges[kA].find((e) => e.to === kB)) edges[kA].push({ to: kB, dist: d })
-    if (!edges[kB].find((e) => e.to === kA)) edges[kB].push({ to: kA, dist: d })
-  }
-  ; (roadsGeojson?.features || []).forEach((f) => {
-    const coords = f.geometry.type === "LineString" ? f.geometry.coordinates : []
-    let prev = null
-    coords.forEach(([lng, lat]) => {
-      const k = ensure(lat, lng)
-      if (prev) addEdge(prev, k)
-      prev = k
-    })
-  })
-  console.log(`Removed ${removedEdges} edges. Blockers:`, Array.from(blockers))
-  return { nodes, edges }
-}
-function snapToGraph(graph, lat, lng, maxSnapMeters = GRAPH_SNAP_MAX_METERS) {
-  let bk = null
-  let bd = Infinity
-  Object.entries(graph.nodes).forEach(([k, n]) => {
-    const d = haversineM(lat, lng, n.lat, n.lng)
-    if (d < bd) {
-      bd = d
-      bk = k
-    }
-  })
-  if (!bk || !Number.isFinite(bd) || bd > maxSnapMeters) return null
-  return { key: bk, dist: bd }
-}
-function dijkstra(graph, startKey, endKey) {
-  const dist = {}
-  const prev = {}
-  const visited = new Set()
-  Object.keys(graph.nodes).forEach((k) => { dist[k] = Infinity })
-  dist[startKey] = 0
-  const queue = [[0, startKey]]
-  while (queue.length) {
-    queue.sort((a, b) => a[0] - b[0])
-    const [d, u] = queue.shift()
-    if (visited.has(u)) continue
-    visited.add(u)
-    if (u === endKey) break
-    for (const { to: v, dist: w } of (graph.edges[u] || [])) {
-      const nd = d + w
-      if (nd < dist[v]) {
-        dist[v] = nd
-        prev[v] = u
-        queue.push([nd, v])
-      }
-    }
-  }
-  if (dist[endKey] === Infinity) return null
-  const path = []
-  let cur = endKey
-  while (cur) {
-    const n = graph.nodes[cur]
-    path.unshift([n.lat, n.lng])
-    cur = prev[cur]
-  }
-  return path.length > 1 ? path : null
-}
+const GRAPH_SNAP_MAX_METERS = 150
 
 const VBIT_CENTER = [17.4938, 78.3908]
 const CAMPUS_ENTRANCE_HINT = [17.470938, 78.723407]
@@ -270,11 +78,7 @@ const OUTDOOR_DESTINATIONS = [
   { id: "canteen", name: "Canteen" },
 ]
 
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-})
+// Removed Leaflet Icons
 
 function toCampusId(value) {
   return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
@@ -452,6 +256,30 @@ function resolveDestinationCoordinate(destinationId) {
   return null
 }
 
+/**
+ * Returns the canonical campus ID of the building polygon that contains the
+ * given GPS point, or null if the point is not inside any polygon.
+ */
+function detectBuildingContainingPoint(lat, lng, geoJsonFeatures) {
+  if (!Array.isArray(geoJsonFeatures) || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null
+  }
+  const pt = { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] } }
+  for (const feature of geoJsonFeatures) {
+    const geomType = feature?.geometry?.type
+    if (geomType !== "Polygon" && geomType !== "MultiPolygon") continue
+    try {
+      if (booleanPointInPolygon(pt, feature)) {
+        const rawId = feature?.properties?.id || feature?.properties?.name || ""
+        return String(rawId).trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+      }
+    } catch {
+      // skip malformed polygons
+    }
+  }
+  return null
+}
+
 function CampusMap({ onHandoffToIndoor }) {
   const mapNodeRef = useRef(null)
   const mapRef = useRef(null)
@@ -463,6 +291,7 @@ function CampusMap({ onHandoffToIndoor }) {
   const hasCenteredOnUserRef = useRef(false)
   const hasGpsFixRef = useRef(false)
   const simpleGraphRef = useRef(null)
+  const campusGeoJsonFeaturesRef = useRef([])
 
   const [userLocation, setUserLocation] = useState(null)
   const [userLocationLabel, setUserLocationLabel] = useState(
@@ -475,6 +304,26 @@ function CampusMap({ onHandoffToIndoor }) {
   const [selectedBuilding, setSelectedBuilding] = useState(null)
   const [campusGraph, setCampusGraph] = useState({})
   const [error, setError] = useState("")
+  // { buildingId, buildingName } when awaiting user confirmation, null otherwise
+  const [buildingConfirm, setBuildingConfirm] = useState(null)
+  const pendingRouteRef = useRef(null)
+
+  // NEW UPGRADE STATES
+  const [is3dMode, setIs3dMode] = useState(false)
+  const [activeBuildingRooms, setActiveBuildingRooms] = useState(null)
+  const [allRooms, setAllRooms] = useState([])
+  const [campusNodes, setCampusNodes] = useState([])
+  const [routeSteps, setRouteSteps] = useState([])
+  const allRoomsRef = useRef([])
+
+  // Fetch rooms and nodes on mount for the classroom-aware routing
+  useEffect(() => {
+    apiClient.get("/availability/all/").then(res => {
+      setAllRooms(res.data || [])
+      allRoomsRef.current = res.data || []
+    }).catch(console.error)
+    apiClient.get("/nodes/").then(res => setCampusNodes(res.data || [])).catch(console.error)
+  }, [])
 
   const campusSummary = useMemo(() => {
     const counts = campusBlueprint.reduce((acc, e) => {
@@ -501,76 +350,94 @@ function CampusMap({ onHandoffToIndoor }) {
     if (!mapNodeRef.current || mapRef.current) return undefined
 
     if (typeof window !== "undefined" && window.localStorage) {
-      GRAPH_CACHE_KEYS.forEach((storageKey) => {
-        window.localStorage.removeItem(storageKey)
-      })
+      GRAPH_CACHE_KEYS.forEach((storageKey) => window.localStorage.removeItem(storageKey))
     }
 
-    const map = L.map(mapNodeRef.current, {
-      scrollWheelZoom: true,
-      dragging: true,
-      zoomControl: false,
-    }).setView(VBIT_CENTER, 17)
+    // DEV ONLY — simulate being on campus
+    // Remove this before deploying to production
+    if (import.meta.env.DEV) {
+      window._userLocation = [17.470998, 78.723508]
+    }
+
+    let map = null;
+    try {
+      map = new maplibregl.Map({
+        container: mapNodeRef.current,
+        style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+        center: [78.7237, 17.4709],
+        zoom: 16,
+        minZoom: 10,
+        pitch: 30,
+        bearing: -20,
+        antialias: true  // ← enables smooth 3D building edges
+      })
+      map.dragRotate.enable();
+      map.touchZoomRotate.enableRotation();
+      map.keyboard.enable();
+      map.scrollZoom.enable();
+
+      // Prevent map scroll from bleeding into the page
+      if (mapNodeRef.current) {
+        mapNodeRef.current.addEventListener('wheel', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }, { passive: false });
+      }
+
+      map.doubleClickZoom.enable();
+      map.touchZoomRotate.enable();
+      map.touchPitch.enable(); // allows two-finger tilt on mobile
+    } catch (err) {
+      console.error('Map init failed:', err)
+      return undefined
+    }
     mapRef.current = map
     if (typeof window !== "undefined") {
-      window._leafletMap = map
-      console.log("Map initialized at:", map.getCenter(), "zoom:", map.getZoom())
+      window._mapLibreMap = map
       window._userLocation = null
     }
+
+    map.addControl(new maplibregl.NavigationControl(), 'top-left')
 
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const userLatLng = [pos.coords.latitude, pos.coords.longitude]
-          if (typeof window !== "undefined") {
-            window._userLocation = userLatLng
-          }
-          console.log("User GPS:", userLatLng)
+          if (typeof window !== "undefined") window._userLocation = userLatLng
           setUserLocation(userLatLng)
           setUserLocationLabel("You are here")
-
-          if (typeof window !== "undefined" && window._leafletMap) {
-            if (!userMarkerRef.current) {
-              userMarkerRef.current = L.circleMarker(userLatLng, {
-                radius: 8, color: "#3b82f6", weight: 3,
-                fillColor: "#93c5fd", fillOpacity: 1,
-              }).addTo(window._leafletMap).bindPopup("You are here")
-            } else {
-              userMarkerRef.current.setLatLng(userLatLng)
-              userMarkerRef.current.setPopupContent("You are here")
-            }
-          }
         },
-        (err) => {
-          console.warn("GPS unavailable:", err.message)
-          if (typeof window !== "undefined") {
-            window._userLocation = null
-          }
-        },
+        (err) => console.warn("GPS unavailable:", err.message),
         { enableHighAccuracy: true }
       )
     }
 
-    L.tileLayer(CAMPUS_BASEMAP_URL, {
-      attribution: "&copy; OpenStreetMap & Carto",
-      maxZoom: 20,
-    }).addTo(map)
+    const hoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      className: "campus-footprint-label",
+      offset: [0, -10]
+    })
 
-    // Custom zoom buttons
-    const zoomControl = L.control({ position: "topleft" })
-    zoomControl.onAdd = () => {
-      const div = L.DomUtil.create("div", "custom-zoom-control")
-      div.innerHTML = `<button class="zoom-btn zoom-in" type="button">+</button><button class="zoom-btn zoom-out" type="button">−</button>`
-      L.DomEvent.disableClickPropagation(div)
-      div.querySelector(".zoom-in").onclick = () => map.zoomIn()
-      div.querySelector(".zoom-out").onclick = () => map.zoomOut()
-      return div
-    }
-    zoomControl.addTo(map)
-
-    // Load GeoJSON footprints
     const ac = new AbortController()
-    async function loadFootprints() {
+    map.on('load', async () => {
+      // Hide the basemap's built-in building layers to prevent clashing
+      const style = map.getStyle();
+      if (style && style.layers) {
+        style.layers.forEach(layer => {
+          if (
+            layer.id.includes('building') ||
+            layer.id.includes('3d') ||
+            layer.type === 'fill-extrusion'
+          ) {
+            if (layer.id !== 'campus-extrusion') {
+              map.setLayoutProperty(layer.id, 'visibility', 'none');
+            }
+          }
+        });
+      }
+
+
       try {
         const [footprintsResponse, roadsResponse] = await Promise.all([
           fetch(withCacheBuster(CAMPUS_FOOTPRINTS_URL), { signal: ac.signal }),
@@ -581,186 +448,147 @@ function CampusMap({ onHandoffToIndoor }) {
 
         const data = enrichGeoJsonWithCampusMetadata(raw)
         let roadData = null
-        if (roadsResponse?.ok) {
-          roadData = await roadsResponse.json()
-        }
+        if (roadsResponse?.ok) roadData = await roadsResponse.json()
 
-        campusFootprintLayerRef.current = L.geoJSON(data, {
-          style: getFootprintStyle,
-          onEachFeature: (feature, layer) => {
-            const props = resolveCampusProperties(feature?.properties)
-            const name = props?.name
-            const baseStyle = getFootprintStyle({ properties: props })
-            if (name) {
-              if (LANDMARK_BUILDINGS[name]) {
-                const info = LANDMARK_BUILDINGS[name];
-                layer.bindTooltip(`
-                  <div style="
-                    width: 220px;
-                    border-radius: 10px;
-                    overflow: hidden;
-                    font-family: Arial, sans-serif;
-                    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
-                    background: #fff;
-                  ">
-                    <img
-                      src="${info.image}"
-                      alt="${name}"
-                      style="width:100%; height:120px; object-fit:cover; display:block;"
-                      onerror="this.style.display='none'"
-                    />
-                    <div style="padding: 10px 12px 12px;">
-                      <div style="font-weight:700; font-size:13px; color:#1A3C5E;">
-                        ${name}
-                      </div>
-                      <div style="font-size:11px; color:#666; margin-top:4px;">
-                        ${info.subtitle}
-                      </div>
-                    </div>
-                  </div>
-                `, {
-                  direction: 'top',
-                  offset: [0, -10],
-                  opacity: 1,
-                  className: 'building-photo-tooltip'
-                });
-              } else {
-                layer.bindTooltip(name, {
-                  permanent: false,
-                  direction: "top",
-                  className: "campus-footprint-label",
-                  opacity: 0.92,
-                })
-              }
-              layer.bindPopup(name)
-            }
-            layer.on("mouseover", () =>
-              layer.setStyle({
-                fillOpacity: FOOTPRINT_HOVER_FILL_OPACITY,
-                weight: (baseStyle.weight || 2) + 2,
-              })
-            )
-            layer.on("mouseout", () =>
-              layer.setStyle({
-                fillOpacity: baseStyle.fillOpacity,
-                weight: baseStyle.weight || 2,
-              })
-            )
-            layer.on("click", () => setSelectedBuilding(props))
-          },
-        }).addTo(map)
+        map.addSource('campus', { type: 'geojson', data })
+
+        map.addLayer({
+          id: 'campus-extrusion',
+          source: 'campus',
+          type: 'fill-extrusion',
+          paint: {
+            'fill-extrusion-color': [
+              'match', ['get', 'type'],
+              'academic', '#2563a8',   // blue for academic
+              'service', '#0d9488',   // teal for service
+              'hostel', '#d97706',   // amber for hostel
+              'ground', '#16a34a',   // green for grounds/open areas
+              'parking', '#7c3aed',   // purple for parking
+              '#444444'                // fallback
+            ],
+            'fill-extrusion-height': [
+              'match', ['get', 'type'],
+              'academic', 20,   // tallest — multi-floor blocks
+              'service', 16,
+              'hostel', 18,
+              'ground', 0.5,  // ← almost flat, just a surface
+              'parking', 4,
+              12                // default
+            ],
+            'fill-extrusion-base': 0,
+            'fill-extrusion-opacity': 0.85
+          }
+        })
+
+        const popup = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          offset: 15
+        });
+
+        map.on('mouseenter', 'campus-extrusion', (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          const { name, category } = e.features[0].properties;
+          popup.setLngLat(e.lngLat)
+            .setHTML(`
+              <div style="font-weight:600;font-size:13px;color:#EF9F27;margin-bottom:2px">${name}</div>
+              <div style="font-size:11px;color:#aaa">${category}</div>
+            `)
+            .addTo(map);
+        });
+
+        map.on('mouseleave', 'campus-extrusion', () => {
+          map.getCanvas().style.cursor = '';
+          popup.remove();
+        });
+
+        map.addLayer({
+          id: 'campus-fill',
+          source: 'campus',
+          type: 'fill',
+          paint: { 'fill-color': 'transparent' }
+        })
+
+        map.addSource('route', { type: 'geojson', data: { type: "FeatureCollection", features: [] } })
+        map.addLayer({
+          id: 'route-line',
+          type: 'line',
+          source: 'route',
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': '#ff7a1a',
+            'line-width': 5,
+            'line-blur': 0.5,
+            'line-opacity': 0.9
+          }
+        })
+
+        map.on('mousemove', 'campus-fill', (e) => {
+          map.getCanvas().style.cursor = 'pointer'
+          const feature = e.features[0]
+          const props = feature.properties
+          const name = props.name || feature.id
+          if (name) {
+            hoverPopup.setLngLat(e.lngLat).setHTML(`
+               <div class="building-popup">
+                 <img src="/images/${props.id}.jpg" 
+                      onerror="this.src='/images/default-building.jpg'"
+                      style="width:180px;height:100px;object-fit:cover;border-radius:6px;"/>
+                 <div class="popup-name">${name}</div>
+                 <div class="popup-type">${props.type} Block</div>
+               </div>
+             `).addTo(map)
+          }
+        })
+
+        map.on('mouseleave', 'campus-fill', () => {
+          map.getCanvas().style.cursor = ''
+          hoverPopup.remove()
+        })
+
+        map.on('click', 'campus-fill', (e) => {
+          const props = e.features[0].properties
+          setSelectedBuilding(props)
+          const name = props.name || ""
+          const bRooms = allRoomsRef.current.filter(r => r.building.toLowerCase().includes(name.split(" ")[0].toLowerCase()))
+          if (bRooms.length > 0) setActiveBuildingRooms({ name, rooms: bRooms })
+          else setActiveBuildingRooms(null)
+        })
 
         const graph = buildCampusGraphFromGeoJson(data, roadData)
         setCampusGraph(graph)
-        simpleGraphRef.current = roadData
-          ? { nodes: CAMPUS_GRAPH_NODES, adjacency: CAMPUS_GRAPH_ADJACENCY }
-          : null
+        campusGeoJsonFeaturesRef.current = Array.isArray(data?.features) ? data.features : []
+        simpleGraphRef.current = roadData ? buildSimpleGraph(roadData) : null
 
-        const bounds = campusFootprintLayerRef.current.getBounds()
-        if (bounds.isValid() && !hasCenteredOnUserRef.current) {
-          map.fitBounds(bounds, { padding: [20, 20] })
-        }
       } catch (e) {
-        if (e.name !== "AbortError") console.error("Footprint load error:", e)
+        if (e.name !== "AbortError") console.error("Load error:", e)
       }
-    }
-    loadFootprints()
+    })
 
     return () => {
       ac.abort()
-      if (routeRequestRef.current) {
-        routeRequestRef.current.abort()
-        routeRequestRef.current = null
-      }
-      if (routeLayerRef.current) { routeLayerRef.current.remove(); routeLayerRef.current = null }
-      if (typeof window !== "undefined" && window._routeLayer) {
-        window._routeLayer.remove()
-        window._routeLayer = null
-      }
-      if (typeof window !== "undefined" && window._gpsConnectorLayer) {
-        window._gpsConnectorLayer.remove()
-        window._gpsConnectorLayer = null
-      }
-      if (destMarkerRef.current) { destMarkerRef.current.remove(); destMarkerRef.current = null }
-      if (campusFootprintLayerRef.current) { campusFootprintLayerRef.current.remove(); campusFootprintLayerRef.current = null }
-      simpleGraphRef.current = null
+      if (routeRequestRef.current) routeRequestRef.current.abort()
+      if (typeof window !== "undefined") window._mapLibreMap = null
       map.remove()
       mapRef.current = null
-      if (typeof window !== "undefined" && window._leafletMap === map) {
-        window._leafletMap = null
-        window._userLocation = null
-      }
     }
   }, [])
 
-  // GPS: watch user position
-  useEffect(() => {
-    if (!navigator.geolocation) {
-      if (typeof window !== "undefined") {
-        window._userLocation = null
-      }
-      if (!hasCenteredOnUserRef.current && mapRef.current) {
-        mapRef.current.setView(VBIT_CENTER, 17)
-        hasCenteredOnUserRef.current = true
-      }
-      return undefined
-    }
-
-    const watchId = navigator.geolocation.watchPosition(
-      ({ coords }) => {
-        const { latitude, longitude, accuracy } = coords
-        const currentLocation = [latitude, longitude]
-        if (typeof window !== "undefined") {
-          window._userLocation = currentLocation
-        }
-        console.log("User GPS:", currentLocation)
-        hasGpsFixRef.current = true
-        setUserLocation(currentLocation)
-        setUserLocationLabel(`Your location (+/-${Math.round(accuracy)}m)`)
-        if (!hasCenteredOnUserRef.current && mapRef.current) {
-          mapRef.current.setView([latitude, longitude], 18)
-          hasCenteredOnUserRef.current = true
-        }
-      },
-      (geoError) => {
-        if (typeof window !== "undefined") {
-          window._userLocation = null
-        }
-        const errorMessage = resolveGeolocationErrorMessage(geoError)
-        if (hasGpsFixRef.current) {
-          setUserLocationLabel(`${errorMessage} - using last known location`)
-        } else {
-          setUserLocationLabel(`${errorMessage} - enable location access to begin routing`)
-        }
-        if (!hasCenteredOnUserRef.current && mapRef.current && !hasGpsFixRef.current) {
-          mapRef.current.setView(VBIT_CENTER, 17)
-          hasCenteredOnUserRef.current = true
-        }
-      },
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-    )
-
-    return () => {
-      navigator.geolocation.clearWatch(watchId)
-    }
-  }, [])
-
-  // Draw / update user marker
+  // Draw / update user marker (NEW pulsing CSS marker)
   useEffect(() => {
     const map = mapRef.current
     if (!map || !userLocation) return
 
     if (!userMarkerRef.current) {
-      userMarkerRef.current = L.circleMarker(userLocation, {
-        radius: 9, color: "#fff", weight: 2,
-        fillColor: "#3b82f6", fillOpacity: 1,
-      }).addTo(map).bindPopup(userLocationLabel)
+      const el = document.createElement('div')
+      el.className = 'gps-pulse-marker'
+      userMarkerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat([userLocation[1], userLocation[0]])
+        .addTo(map)
     } else {
-      userMarkerRef.current.setLatLng(userLocation)
-      userMarkerRef.current.setPopupContent(userLocationLabel)
+      userMarkerRef.current.setLngLat([userLocation[1], userLocation[0]])
     }
-    userMarkerRef.current.bringToFront()
-  }, [userLocation, userLocationLabel])
+  }, [userLocation])
 
   useEffect(() => {
     window.dispatchEvent(
@@ -787,12 +615,46 @@ function CampusMap({ onHandoffToIndoor }) {
     console.log("[Route Debug] Destination snap result:", destSnap)
     if (!destSnap?.key) throw new Error("Destination not reachable.")
 
-    const inside = startLat >= CAMPUS_BOUNDS.minLat && startLat <= CAMPUS_BOUNDS.maxLat &&
-      startLng >= CAMPUS_BOUNDS.minLng && startLng <= CAMPUS_BOUNDS.maxLng
-
     let connectorStart = [], graphPath = []
 
-    if (!inside) {
+    // Point-in-polygon check: if the user's GPS is inside a building polygon,
+    // use that building's registered entrance as the route start to avoid
+    // snapping to a distant road node near a different building.
+    let effectiveStartLat = startLat
+    let effectiveStartLng = startLng
+    const containingBuildingId = detectBuildingContainingPoint(
+      startLat, startLng, campusGeoJsonFeaturesRef.current
+    )
+    console.log("[Route Debug] Point-in-polygon building:", containingBuildingId)
+    if (containingBuildingId && containingBuildingId !== destinationId) {
+      const entrance = BUILDING_ENTRANCES[containingBuildingId]
+      if (Array.isArray(entrance) && Number.isFinite(entrance[0]) && Number.isFinite(entrance[1])) {
+        effectiveStartLat = entrance[0]
+        effectiveStartLng = entrance[1]
+        console.log("[Route Debug] Using building entrance as start:", containingBuildingId, entrance)
+      }
+    }
+
+    // Debug: log what we're snapping from and what nodes look like
+    console.log("[Snap Debug] Snapping from:", effectiveStartLat, effectiveStartLng)
+    console.log("[Snap Debug] Sample node:", Object.entries(graph.nodes)[0])
+
+    // Try snap as [lat, lng] first, then [lng, lat] if that fails
+    let startSnap = snapToNearestNode(effectiveStartLat, effectiveStartLng, graph, GRAPH_SNAP_MAX_METERS)
+    if (!startSnap?.key) {
+      // Coords might be swapped — try the other orientation
+      console.warn("[Snap Debug] First snap failed, trying swapped coords")
+      startSnap = snapToNearestNode(effectiveStartLng, effectiveStartLat, graph, GRAPH_SNAP_MAX_METERS)
+    }
+    // Last resort — massively increase radius to find ANY node
+    if (!startSnap?.key) {
+      console.warn("[Snap Debug] Both failed, using 5000m radius fallback")
+      startSnap = snapToNearestNode(effectiveStartLat, effectiveStartLng, graph, 5000)
+    }
+    console.log("[Snap Debug] Final snap result:", startSnap)
+
+
+    if (!startSnap?.key) {
       const eSnap = snapToNearestNode(
         CAMPUS_ENTRANCE_HINT[0],
         CAMPUS_ENTRANCE_HINT[1],
@@ -818,22 +680,20 @@ function CampusMap({ onHandoffToIndoor }) {
       console.log("[Route Debug] Dijkstra path length:", graphPath.length)
       if (graphPath.length < 2) throw new Error("No campus path found from entrance to destination.")
     } else {
-      const startSnap = snapToNearestNode(startLat, startLng, graph, 80)
-      console.log("[Route Debug] Start snap result:", startSnap)
-      const effectiveStartSnap = startSnap?.key
-        ? startSnap
-        : snapToNearestNode(
-          startLat,
-          startLng,
-          graph,
-          150
-        )
-      if (!effectiveStartSnap?.key) throw new Error("Current location is too far from the road graph.")
-      graphPath = campusGraphDijkstra(effectiveStartSnap.key, destSnap.key, graph) || []
+      graphPath = campusGraphDijkstra(startSnap.key, destSnap.key, graph) || []
       console.log("Path length:", graphPath.length)
       console.log("First 3 coords:", graphPath.slice(0, 3))
       console.log("[Route Debug] Dijkstra path length:", graphPath.length)
       if (graphPath.length < 2) throw new Error("No campus path found to destination.")
+
+      // Prepend the real user GPS so the drawn line begins exactly where
+      // the user is standing, not at the snapped road node.
+      const firstGraphCoord = graphPath[0]
+      const firstIsExact =
+        Array.isArray(firstGraphCoord) &&
+        Math.abs(firstGraphCoord[0] - startLat) < 0.000015 &&
+        Math.abs(firstGraphCoord[1] - startLng) < 0.000015
+      connectorStart = firstIsExact ? [] : [[startLat, startLng]]
     }
 
     // Append the actual destination coordinate as the final segment so the
@@ -854,8 +714,9 @@ function CampusMap({ onHandoffToIndoor }) {
   }
   // Routing
   // Route from the campus main entrance to the selected destination.
-  async function handleRoute() {
+  async function handleRoute(overrideStartLat, overrideStartLng) {
     setError("")
+    setBuildingConfirm(null)
     if (!selectedDest) { setError("Select a destination."); return }
     if (!campusGraph[selectedDest]) { setError("Destination not in map."); return }
 
@@ -869,9 +730,31 @@ function CampusMap({ onHandoffToIndoor }) {
         Number.isFinite(window._userLocation[1])
         ? window._userLocation
         : null
-    const startCoords = globalStart || userLocation || CAMPUS_ENTRANCE_HINT
-    console.log("Routing from:", startCoords)
-    const [startLat, startLng] = startCoords
+    const startCoords = globalStart || userLocation
+    if (!startCoords) {
+      setError("Waiting for your GPS location...")
+      return
+    }
+
+    const [startLat, startLng] = typeof overrideStartLat === "number"
+      ? [overrideStartLat, overrideStartLng]
+      : startCoords
+
+    // If no override, check point-in-polygon and ask for confirmation first.
+    if (typeof overrideStartLat !== "number") {
+      const detectedId = detectBuildingContainingPoint(
+        startLat, startLng, campusGeoJsonFeaturesRef.current
+      )
+      console.log("[Confirm] Detected building:", detectedId)
+      if (detectedId && detectedId !== selectedDest) {
+        const blueprint = campusBlueprint.find((b) => b.id === detectedId)
+        const buildingName = blueprint?.name ||
+          detectedId.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+        pendingRouteRef.current = { startLat, startLng, detectedId }
+        setBuildingConfirm({ buildingId: detectedId, buildingName })
+        return
+      }
+    }
     const destNode = campusGraph[selectedDest]
     const destinationCoordinate =
       resolveDestinationCoordinate(selectedDest) ||
@@ -901,10 +784,10 @@ function CampusMap({ onHandoffToIndoor }) {
     const controller = new AbortController()
     routeRequestRef.current = controller
 
-    if (routeLayerRef.current) { routeLayerRef.current.remove(); routeLayerRef.current = null }
+    if (routeLayerRef.current) { clearInterval(routeLayerRef.current); routeLayerRef.current = null }
     if (destMarkerRef.current) { destMarkerRef.current.remove(); destMarkerRef.current = null }
     if (typeof window !== "undefined" && window._gpsConnectorLayer) {
-      window._gpsConnectorLayer.remove()
+      clearInterval(window._gpsConnectorLayer)
       window._gpsConnectorLayer = null
     }
     setOutdoorPath([])
@@ -937,50 +820,88 @@ function CampusMap({ onHandoffToIndoor }) {
       console.log("graphPath:", JSON.stringify(routeSegments.graphPath))
       console.log("fullPath final:", JSON.stringify(fullPath))
       console.log("Drawing polyline with coords:", fullPath)
-      const drawMap = (typeof window !== "undefined" && window._leafletMap) ? window._leafletMap : map
-      const newRouteLayer = L.polyline(fullPath, {
-        color: "#2563eb",
-        weight: 5,
-        opacity: 0.85,
-      }).addTo(drawMap)
-      if (typeof window !== "undefined") {
-        window._routeLayer = newRouteLayer
-        if (newRouteLayer.getBounds().isValid()) {
-          drawMap.fitBounds(newRouteLayer.getBounds(), { padding: [60, 60] })
-          console.log("fitBounds called:", newRouteLayer.getBounds().toString())
-        } else {
-          console.log("Bounds invalid - polyline may be off screen")
-        }
-      }
-      routeLayerRef.current = newRouteLayer
+      const drawMap = mapRef.current
 
-      if (
-        typeof window !== "undefined" &&
-        Array.isArray(window._userLocation) &&
-        Array.isArray(routeSegments?.graphPath) &&
-        routeSegments.graphPath.length > 0 &&
-        (!Array.isArray(routeSegments.connectorStart) || routeSegments.connectorStart.length === 0)
-      ) {
-        const snappedStart = routeSegments.graphPath[0]
-        if (
-          Array.isArray(snappedStart) &&
-          Number.isFinite(snappedStart[0]) &&
-          Number.isFinite(snappedStart[1])
-        ) {
-          window._gpsConnectorLayer = L.polyline(
-            [window._userLocation, snappedStart],
-            { color: "#3b82f6", weight: 3, dashArray: "6,8", opacity: 0.7 }
-          ).addTo(drawMap)
+      const rawMaplibreCoords = fullPath.map((c) => [c[1], c[0]])
+      let smoothedPath = rawMaplibreCoords
+      if (smoothedPath.length >= 3) {
+        try {
+          const lineFeature = {
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: smoothedPath }
+          }
+          const curved = bezierSpline(lineFeature, { resolution: 10000, sharpness: 0.85 })
+          smoothedPath = curved.geometry.coordinates
+        } catch (e) {
+          console.warn("Spline fallback", e)
         }
       }
 
-      destMarkerRef.current = L.circleMarker([endLat, endLng], {
-        radius: 10, color: "#f59e0b", weight: 3,
-        fillColor: "#fbbf24", fillOpacity: 1,
-      }).addTo(drawMap).bindPopup(destNode.label || selectedDest)
+      let currentPoint = 0
+      const animatedCoords = []
 
-      routeLayerRef.current.bringToFront()
-      userMarkerRef.current?.bringToFront()
+      if (drawMap.getSource('route')) {
+        drawMap.getSource('route').setData({ type: "FeatureCollection", features: [] })
+      }
+
+      const drawInterval = setInterval(() => {
+        if (!mapRef.current || currentPoint >= smoothedPath.length) {
+          clearInterval(drawInterval)
+          if (smoothedPath.length > 0) {
+            const bounds = new maplibregl.LngLatBounds(
+              smoothedPath[0],
+              smoothedPath[0]
+            )
+            smoothedPath.forEach(c => bounds.extend(c))
+            drawMap.fitBounds(bounds, { padding: 60 })
+          }
+          return
+        }
+        animatedCoords.push(smoothedPath[currentPoint])
+        if (drawMap.getSource('route')) {
+          drawMap.getSource('route').setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: animatedCoords }
+          })
+        }
+        currentPoint++
+      }, 1500 / Math.max(smoothedPath.length, 1))
+
+      routeLayerRef.current = drawInterval // save interval to clear it later if needed
+
+      if (window._movingDot) window._movingDot.remove()
+      const dotEl = document.createElement('div')
+      dotEl.className = 'moving-route-dot'
+      window._movingDot = new maplibregl.Marker({ element: dotEl })
+        .setLngLat([fullPath[0][1], fullPath[0][0]])
+        .addTo(drawMap)
+
+      let dotIndex = 0
+      const dotInterval = setInterval(() => {
+        if (!window._movingDot || dotIndex >= fullPath.length) {
+          clearInterval(dotInterval)
+          if (window._movingDot) window._movingDot.remove()
+          return
+        }
+        window._movingDot.setLngLat([fullPath[dotIndex][1], fullPath[dotIndex][0]])
+        dotIndex++
+      }, 2500 / Math.max(fullPath.length, 1))
+
+      window._gpsConnectorLayer = dotInterval // attach to clear it on new route
+
+      if (destMarkerRef.current) destMarkerRef.current.remove()
+      const destEl = document.createElement('div')
+      destEl.style.width = '20px'
+      destEl.style.height = '20px'
+      destEl.style.background = '#fbbf24'
+      destEl.style.border = '2px solid #f59e0b'
+      destEl.style.borderRadius = '50%'
+      destEl.style.boxShadow = '0 0 10px rgba(245, 158, 11, 0.8)'
+
+      destMarkerRef.current = new maplibregl.Marker({ element: destEl })
+        .setLngLat([endLng, endLat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(`<strong>${destNode.label || selectedDest}</strong>`))
+        .addTo(drawMap)
     } catch (routeError) {
       if (routeError?.name === "AbortError") {
         return
@@ -996,6 +917,92 @@ function CampusMap({ onHandoffToIndoor }) {
   }
 
 
+
+  function handleBuildingConfirmYes() {
+    const pending = pendingRouteRef.current
+    if (!pending) return
+    const entrance = BUILDING_ENTRANCES[pending.detectedId]
+    if (Array.isArray(entrance) && Number.isFinite(entrance[0]) && Number.isFinite(entrance[1])) {
+      handleRoute(entrance[0], entrance[1])
+    } else {
+      // No entrance registered — fall back to raw GPS
+      handleRoute(pending.startLat, pending.startLng)
+    }
+    pendingRouteRef.current = null
+    setBuildingConfirm(null)
+  }
+
+  // NEW: Classroom-aware routing directly over API
+  async function handleRoomRoute(roomId) {
+    setError("")
+    setRouteSteps([])
+    if (!userLocation) { setError("Waiting for GPS location..."); return }
+
+    // Find nearest outdoor node to user to act as source
+    let nearestDist = Infinity
+    let sourceNodeId = "MAIN_GATE"
+    campusNodes.forEach(n => {
+      if (n.node_type === "outdoor" && n.latitude) {
+        const d = distanceMeters(userLocation[0], userLocation[1], n.latitude, n.longitude)
+        if (d < nearestDist) { nearestDist = d; sourceNodeId = n.node_id }
+      }
+    })
+
+    try {
+      const res = await apiClient.get("/navigate/", {
+        params: { source: sourceNodeId, destination: `${roomId}_NODE` }
+      })
+      const pathData = res.data
+
+      if (routeLayerRef.current) clearInterval(routeLayerRef.current)
+      const drawMap = mapRef.current
+      const coords = [[userLocation[0], userLocation[1]], ...pathData.coords.map(c => [c.lat, c.lng])]
+
+      if (drawMap.getSource('route')) {
+        drawMap.getSource('route').setData({ type: "FeatureCollection", features: [] })
+      }
+
+      setRouteSteps(pathData.steps || [])
+
+      let pIdx = 0
+      const animatedCoords = []
+      const drawInt = setInterval(() => {
+        if (!mapRef.current || pIdx >= coords.length) {
+          clearInterval(drawInt)
+          if (coords.length > 0) {
+            const bounds = new maplibregl.LngLatBounds(
+              [coords[0][1], coords[0][0]],
+              [coords[0][1], coords[0][0]]
+            )
+            coords.forEach(c => bounds.extend([c[1], c[0]]))
+            drawMap.fitBounds(bounds, { padding: 60 })
+          }
+          return
+        }
+        animatedCoords.push([coords[pIdx][1], coords[pIdx][0]])
+        if (drawMap.getSource('route')) {
+          drawMap.getSource('route').setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: animatedCoords }
+          })
+        }
+        pIdx++
+      }, 1500 / Math.max(coords.length, 1))
+
+      routeLayerRef.current = drawInt
+
+      setActiveBuildingRooms(null) // close sidebar
+    } catch (err) {
+      setError(err.response?.data?.error || "Indoor route not found.")
+    }
+  }
+
+  function handleBuildingConfirmNo() {
+    pendingRouteRef.current = null
+    setBuildingConfirm(null)
+    setError("Tap your building on the map then try again.")
+  }
+
   function handleHandoff() {
     if (!outdoorPath.length) return
     onHandoffToIndoor?.({ building: "nirmithi", entranceNode: "entrance" })
@@ -1003,7 +1010,7 @@ function CampusMap({ onHandoffToIndoor }) {
 
   return (
     <div className="campus-map-wrapper">
-      <div className="campus-map-toolbar">
+      <div className="campus-map-toolbar map-controls">
         <DestinationSearch
           className="campus-map-destination-search"
           label="Destination"
@@ -1013,43 +1020,112 @@ function CampusMap({ onHandoffToIndoor }) {
           onChange={(id) => { setSelectedDest(id); setError("") }}
           emptyMessage="No destination found."
         />
-        <button type="button" className="route-cta" onClick={handleRoute} disabled={!selectedDest}>
-          <svg xmlns="http://www.w3.org/2000/svg" className="route-cta-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6" />
-          </svg>
-          <span>Start Route</span>
-        </button>
-        <button type="button" className="route-button secondary" onClick={handleHandoff} disabled={!outdoorPath.length}>
-          Continue Indoors
-        </button>
+        <div className="route-buttons">
+          <button type="button" className="route-cta" onClick={handleRoute} disabled={!selectedDest || (userLocationLabel === "Locating..." && !hasGpsFixRef.current)}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="route-cta-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+            <span>{userLocationLabel === "Locating..." && !hasGpsFixRef.current ? "📍 Locating..." : "Start Route"}</span>
+          </button>
+          <button type="button" className="route-button secondary" onClick={handleHandoff} disabled={!outdoorPath.length}>
+            Continue Indoors
+          </button>
+        </div>
         {error && <span className="campus-map-error">{error}</span>}
+        {buildingConfirm && (
+          <div className="building-confirm-banner">
+            <span className="building-confirm-text">
+              📍 Are you inside <strong>{buildingConfirm.buildingName}</strong>?
+            </span>
+            <div className="building-confirm-actions">
+              <button type="button" className="building-confirm-yes" onClick={handleBuildingConfirmYes}>✓ Yes</button>
+              <button type="button" className="building-confirm-no" onClick={handleBuildingConfirmNo}>✗ No</button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="campus-overview-row">
+      <div className="campus-overview-row filter-chips">
         {campusSummary.map((s) => (
           <span key={s.id} className="campus-overview-chip">{s.label}: {s.count}</span>
         ))}
       </div>
 
-      {selectedBuilding && (
-        <article className="campus-info-card">
-          <div className="campus-info-head">
-            <h3>{selectedBuilding.name}</h3>
-            <button type="button" className="campus-info-close" onClick={() => setSelectedBuilding(null)}>x</button>
-          </div>
-          <p className="campus-info-type">{getTypeLabel(selectedBuilding.type)}</p>
-          <div className="campus-info-meta">
-            {typeof selectedBuilding.floors === "number" && selectedBuilding.floors > 0 && <span>Floors: {selectedBuilding.floors}</span>}
-            {selectedBuilding.capacity && <span>Capacity: {selectedBuilding.capacity}</span>}
-            {selectedBuilding.area_sqft && <span>Area: {selectedBuilding.area_sqft} sqft</span>}
-          </div>
-          {Array.isArray(selectedBuilding.departments) && selectedBuilding.departments.length > 0 && (
-            <p className="campus-info-departments">Departments: {selectedBuilding.departments.join(", ")}</p>
-          )}
-        </article>
-      )}
+      <div className="map-and-sidebar" style={{ display: "flex", gap: "1rem", position: "relative" }}>
 
-      <div ref={mapNodeRef} className="campus-map-canvas" />
+        <div
+          ref={mapNodeRef}
+          className="campus-map-canvas"
+        >
+          {/* NEW Reset View Button */}
+          <button
+            className="reset-3d-btn campus-overview-chip"
+            style={{ cursor: "pointer", background: "#ff7a1a", color: "#000", fontWeight: "bold" }}
+            onClick={() => {
+              if (mapRef.current) {
+                mapRef.current.flyTo({
+                  center: [78.5580, 17.4515],
+                  zoom: 17,
+                  pitch: 45,
+                  bearing: -20,
+                  duration: 1500
+                });
+              }
+            }}
+          >
+            🔄 Reset 3D View
+          </button>
+        </div>
+
+        {/* Live Classroom Sidebar Popup */}
+        {activeBuildingRooms && (
+          <aside className="classroom-sidebar map-overlay-sidebar">
+            <div className="classroom-sidebar-head">
+              <h3>{activeBuildingRooms.name} Rooms</h3>
+              <button className="campus-info-close" onClick={() => setActiveBuildingRooms(null)}>x</button>
+            </div>
+            <div className="classroom-sidebar-scroll">
+              {activeBuildingRooms.rooms.map(room => (
+                <div key={room.room_id} className={`sidebar-room-card ${room.status}`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <strong>{room.room_id}</strong>
+                    <span className={`status-dot ${room.status}`}></span>
+                  </div>
+                  <p className="sidebar-room-name">{room.name} (F{room.floor})</p>
+
+                  {room.status === "available" ? (
+                    <button className="sidebar-route-btn" onClick={() => handleRoomRoute(room.room_id)}>
+                      📍 Route Here
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="sidebar-occupied-text">Occupied right now</p>
+                      <button className="sidebar-route-btn alternate" onClick={() => {
+                        const altRoom = allRoomsRef.current.find(r => r.status === "available" && r.building === room.building && r.floor === room.floor)
+                        if (altRoom) handleRoomRoute(altRoom.room_id)
+                        else alert("No available rooms on this floor right now.")
+                      }}>
+                        🔄 Route to nearest free room
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </aside>
+        )}
+
+        {/* Route steps popover if navigating to a room */}
+        {routeSteps.length > 0 && (
+          <div className="route-steps-popover">
+            <h4>Indoor Directions</h4>
+            <ol>
+              {routeSteps.map((step, i) => <li key={i}>{step}</li>)}
+            </ol>
+            <button onClick={() => setRouteSteps([])} className="campus-info-close">Dismiss</button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,16 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 import Fuse from "fuse.js"
 
-function buildSearchText(option) {
-  if (!option) {
-    return ""
-  }
-
-  const label = option.label || ""
-  const searchText = option.searchText || ""
-  return `${label} ${searchText}`.trim().toLowerCase()
-}
-
 function DestinationSearch({
   label,
   placeholder = "Search destination...",

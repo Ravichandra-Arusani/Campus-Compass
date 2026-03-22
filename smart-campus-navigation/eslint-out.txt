@@ -1,0 +1,7 @@
+[0m[0m
+[0m[4mC:\Users\A.Ravi chandra\OneDrive\Desktop\Smart navigation\smart-campus-navigation\src\components\CampusMap.jsx[24m[0m
+[0m  [2m596:63[22m  [31merror[39m  'GRAPH_SNAP_MAX_METERS' is not defined  [2mno-undef[22m[0m
+[0m  [2m610:9[22m   [31merror[39m  'GRAPH_SNAP_MAX_METERS' is not defined  [2mno-undef[22m[0m
+[0m[0m
+[0m[31m[1m✖ 2 problems (2 errors, 0 warnings)[22m[39m[0m
+[0m[31m[1m[22m[39m[0m

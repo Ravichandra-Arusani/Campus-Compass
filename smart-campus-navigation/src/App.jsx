@@ -6,6 +6,7 @@ import RoomAvailability from "./components/RoomAvailability"
 import CinematicLanding from "./components/CinematicLanding"
 import Help from "./components/Help"
 import IndoorNavigation from "./components/IndoorNavigation"
+import AdminPanel from "./components/AdminPanel"
 import StickyTabs from "./components/StickyTabs"
 import {
   bootstrapAuth,
@@ -28,6 +29,13 @@ function App() {
   const [videoElement, setVideoElement] = useState(null)
   const [authState, setAuthState] = useState(() => getAuthSnapshot())
   const [indoorStartNode, setIndoorStartNode] = useState(null)
+  const [isNavigating, setIsNavigating] = useState(false)
+
+  useEffect(() => {
+    const handleRouteState = (e) => setIsNavigating(e.detail?.active || false)
+    window.addEventListener("smart-nav:route-state", handleRouteState)
+    return () => window.removeEventListener("smart-nav:route-state", handleRouteState)
+  }, [])
 
   const canViewAnalytics = Boolean(authState.isAuthenticated && authState.isStaff)
   const resolvedActiveTab =
@@ -38,6 +46,7 @@ function App() {
       { id: "map", label: "MAP" },
       { id: "indoor", label: "INDOOR NAVIGATION" },
       { id: "classroom", label: "ROOM AVAILABILITY" },
+      { id: "admin", label: "ADMIN" },
       { id: "help", label: "HELP" },
     ]
 
@@ -187,7 +196,9 @@ function App() {
 
         <section className="dashboard-section" id="dashboard">
           <div className="tabs-shell">
-            <StickyTabs activeTab={resolvedActiveTab} onChange={handleTabChange} tabs={tabs} />
+            <div style={{ display: isNavigating ? 'none' : 'block' }}>
+              <StickyTabs activeTab={resolvedActiveTab} onChange={handleTabChange} tabs={tabs} />
+            </div>
 
             <div className="tab-content">
               {resolvedActiveTab === "map" && (
@@ -214,6 +225,7 @@ function App() {
               )}
               {resolvedActiveTab === "indoor" && <IndoorNavigation startNode={indoorStartNode} />}
               {resolvedActiveTab === "classroom" && <RoomAvailability />}
+              {resolvedActiveTab === "admin" && <AdminPanel />}
               {resolvedActiveTab === "help" && <Help />}
               {resolvedActiveTab === "analytics" && canViewAnalytics && hasOpenedAnalytics && (
                 <Suspense

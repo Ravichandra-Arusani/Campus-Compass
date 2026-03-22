@@ -1,4 +1,4 @@
-// src/components/IndoorNavigation.jsx
+// src/components/IndoorNavigation.jsx — Upgraded UI
 import { useMemo, useState } from "react"
 import { floor1, floor2, floor3 } from "../indoor/nirmithiGraph"
 import { astar } from "../indoor/astar"
@@ -10,12 +10,45 @@ const RIGHT_X = 560
 const STAIR_X = 100
 const WASH_ACCESS_X = 130
 const WASH_ACCESS_Y = 620
-
 const CORR = "100,695 100,620 160,620 260,620 560,620 560,143"
 
+// ── Room type config ─────────────────────────────────────────────────────────
+const ROOM_TYPE = {
+  classroom: { color: "#1e3a5f", stroke: "#3b82f6", icon: "🎓", label: "Classroom" },
+  lab: { color: "#1a2f1a", stroke: "#22c55e", icon: "🔬", label: "Lab" },
+  office: { color: "#2d1f0e", stroke: "#f97316", icon: "🏢", label: "Office" },
+  washroom: { color: "#0f2744", stroke: "#1d4ed8", icon: "🚻", label: "Washroom" },
+  stairs: { color: "#1e3a5f", stroke: "#3b82f6", icon: "🪜", label: "Stairs" },
+}
+
+function getRoomType(id) {
+  if (id.startsWith("class")) return "classroom"
+  if (id.startsWith("lab")) return "lab"
+  if (id.includes("hod") || id.includes("staff")) return "office"
+  if (id.includes("washroom")) return "washroom"
+  if (id === "stairs") return "stairs"
+  return "classroom"
+}
+
+// ── Color helpers ─────────────────────────────────────────────────────────────
+function fill(id, pathSet, dest, occupiedSet) {
+  if (id === dest) return "#f59e0b"
+  if (occupiedSet.has(id)) return "#7f1d1d"
+  if (pathSet.has(id)) return ROOM_TYPE[getRoomType(id)].color + "cc"
+  return ROOM_TYPE[getRoomType(id)].color
+}
+
+function strokeColor(id, pathSet, dest, occupiedSet) {
+  if (id === dest) return "#f59e0b"
+  if (pathSet.has(id)) return ROOM_TYPE[getRoomType(id)].stroke
+  if (occupiedSet.has(id)) return "#ef4444"
+  return ROOM_TYPE[getRoomType(id)].stroke + "66"
+}
+
+// ── Floor data ────────────────────────────────────────────────────────────────
 const FLOORS = {
   3: {
-    title: "Nirmithi Block - 3rd Floor - CSBS Department",
+    title: "Nirmithi Block · 3rd Floor · CSBS Department",
     nodes: floor3.nodes,
     edges: floor3.edges,
     occupied: new Set(["class_303"]),
@@ -44,7 +77,7 @@ const FLOORS = {
     ],
   },
   2: {
-    title: "Nirmithi Block - 2nd Floor",
+    title: "Nirmithi Block · 2nd Floor",
     nodes: floor2.nodes,
     edges: floor2.edges,
     occupied: new Set([]),
@@ -73,7 +106,7 @@ const FLOORS = {
     ],
   },
   1: {
-    title: "Nirmithi Block - 1st Floor",
+    title: "Nirmithi Block · 1st Floor",
     nodes: floor1.nodes,
     edges: floor1.edges,
     occupied: new Set([]),
@@ -87,39 +120,21 @@ const FLOORS = {
       { id: "class_105", x: 20, y: 100, w: 480, h: RH, label: "Classroom 105" },
       { id: "lab_102", x: 20, y: 235, w: 480, h: RH, label: "Lab 102" },
       { id: "class_101", x: 20, y: 370, w: 480, h: RH, label: "Classroom 101" },
-      { id: "staff_room_f1", x: 20, y: 505, w: 480, h: RH, label: "Staff Room" }, // Merged room
+      { id: "staff_room_f1", x: 20, y: 505, w: 480, h: RH, label: "Staff Room" },
       { id: "stairs", x: STAIR_X - 90, y: 660, w: 180, h: 70, label: "Stairs" },
     ],
     connectors: [
       { id: "class_105", x1: 500, y1: 143, x2: RIGHT_X, y2: 143 },
       { id: "lab_102", x1: 500, y1: 278, x2: RIGHT_X, y2: 278 },
       { id: "class_101", x1: 500, y1: 413, x2: RIGHT_X, y2: 413 },
-      { id: "staff_room_f1", x1: 500, y1: 548, x2: RIGHT_X, y2: 548 }, // Anchor point stays the same
+      { id: "staff_room_f1", x1: 500, y1: 548, x2: RIGHT_X, y2: 548 },
       { id: "stairs", x1: STAIR_X, y1: floor1.nodes.stairs.y, x2: floor1.nodes.stairs_landing.x, y2: floor1.nodes.stairs_landing.y },
     ],
-  }
+  },
 }
 
-function fill(id, pathSet, dest, occupiedSet) {
-  if (id === dest) return "#f59e0b"
-  if (id === "stairs") return "#1e3a5f"
-  if (id === "washroom" || id === "girls_washroom") {
-    if (!pathSet.has(id)) return "#0f2744"
-  }
-  if (pathSet.has(id)) return "#f59e0b22"
-  if (occupiedSet.has(id)) return "#7f1d1d"
-  return "#1e293b"
-}
-function stroke(id, pathSet, dest, occupiedSet) {
-  if (id === dest) return "#f59e0b"
-  if (pathSet.has(id)) return "#f59e0b"
-  if (occupiedSet.has(id)) return "#ef4444"
-  if (id === "stairs") return "#3b82f6"
-  if (id === "washroom" || id === "girls_washroom") return "#1d4ed8"
-  return "#334155"
-}
-
-function FloorPlan({ floorId, path, destination, currentNode }) {
+// ── FloorPlan SVG ─────────────────────────────────────────────────────────────
+function FloorPlan({ floorId, path, destination, currentNode, animating }) {
   const floor = FLOORS[floorId]
   const pathSet = new Set(path)
   const nodes = floor.nodes
@@ -130,14 +145,42 @@ function FloorPlan({ floorId, path, destination, currentNode }) {
     .join(" ")
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`}
-      style={{ width: "100%", maxWidth: 500, height: "auto", background: "#0f172a", borderRadius: 14, border: "1px solid #1e293b" }}>
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{
+        width: "100%", maxWidth: 500, height: "auto",
+        background: "#0a0f1e",
+        borderRadius: 16,
+        border: "1px solid #1e293b",
+        filter: animating ? "drop-shadow(0 0 12px #f59e0b44)" : "none",
+        transition: "filter 0.4s ease",
+      }}
+    >
+      {/* Glow defs */}
+      <defs>
+        <filter id="glow">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <filter id="destGlow">
+          <feGaussianBlur stdDeviation="5" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <style>{`
+          @keyframes dashMove { to { stroke-dashoffset: -21 } }
+          @keyframes pulse { 0%,100% { opacity:1; r:12 } 50% { opacity:0.7; r:15 } }
+          @keyframes destPulse { 0%,100% { opacity:0.3 } 50% { opacity:0.7 } }
+          @keyframes fadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
+        `}</style>
+      </defs>
 
-      <text x={W / 2} y={30} textAnchor="middle" fontSize={12} fill="#475569" fontWeight="700">
+      {/* Floor title */}
+      <text x={W / 2} y={30} textAnchor="middle" fontSize={11}
+        fill="#475569" fontWeight="700" letterSpacing="1">
         {floor.title.toUpperCase()}
       </text>
 
-      {/* Corridor */}
+      {/* Corridor background */}
       <polyline points={CORR} stroke="#1e293b" strokeWidth={55} fill="none" strokeLinecap="square" />
       <polyline points={CORR} stroke="#334155" strokeWidth={1} fill="none" />
       <text fontSize={10} fill="#334155" fontWeight="600"
@@ -147,81 +190,183 @@ function FloorPlan({ floorId, path, destination, currentNode }) {
       {floor.connectors.map(c => (
         <line key={c.id}
           x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
-          stroke={pathSet.has(c.id) ? "#f59e0b" : "#334155"}
+          stroke={pathSet.has(c.id) ? ROOM_TYPE[getRoomType(c.id)].stroke : "#2d3f55"}
           strokeWidth={pathSet.has(c.id) ? 2.5 : 1}
           strokeDasharray={pathSet.has(c.id) ? "none" : "5 3"}
+          style={{ transition: "stroke 0.3s ease" }}
         />
       ))}
 
-      {/* Route */}
+      {/* Animated route path */}
       {routePts && (
-        <polyline points={routePts}
-          stroke="#f59e0b" strokeWidth={5} fill="none"
-          strokeLinecap="round" strokeLinejoin="round"
-          strokeDasharray="14 7"
-          style={{ animation: "dashMove 0.7s linear infinite" }}
-        />
+        <>
+          {/* Glow layer */}
+          <polyline points={routePts}
+            stroke="#f59e0b" strokeWidth={10} fill="none"
+            strokeLinecap="round" strokeLinejoin="round"
+            opacity={0.15}
+          />
+          {/* Main animated line */}
+          <polyline points={routePts}
+            stroke="#f59e0b" strokeWidth={4} fill="none"
+            strokeLinecap="round" strokeLinejoin="round"
+            strokeDasharray="14 7"
+            style={{ animation: "dashMove 0.7s linear infinite" }}
+            filter="url(#glow)"
+          />
+        </>
       )}
 
       {/* Room boxes */}
-      {floor.layout.map(r => (
-        <g key={r.id}>
-          <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={7}
-            fill={fill(r.id, pathSet, destination, floor.occupied)}
-            stroke={stroke(r.id, pathSet, destination, floor.occupied)}
-            strokeWidth={r.id === destination ? 2.5 : 1.5}
-          />
-          <text x={r.x + r.w / 2} y={r.y + r.h / 2 + (floor.occupied.has(r.id) ? -8 : 5)}
-            textAnchor="middle" fontSize={r.w < 150 ? 10 : 13} fontWeight="600"
-            fill={r.id === destination ? "#000" : "#e2e8f0"}>
-            {r.label}
-          </text>
-          {floor.occupied.has(r.id) && (
-            <text x={r.x + r.w / 2} y={r.y + r.h / 2 + 14}
-              textAnchor="middle" fontSize={10} fill="#f87171">Occupied</text>
-          )}
-          {r.id === destination && (
-            <text x={r.x + r.w / 2} y={r.y + r.h / 2 + 18}
-              textAnchor="middle" fontSize={9} fill="#000" fontWeight="700">Destination</text>
-          )}
-        </g>
-      ))}
+      {floor.layout.map(r => {
+        const type = getRoomType(r.id)
+        const isDest = r.id === destination
+        const isOccupied = floor.occupied.has(r.id)
+        const isOnPath = pathSet.has(r.id)
+        const typeInfo = ROOM_TYPE[type]
 
-      {/* YOU dot at stairs */}
-      <circle cx={youNode.x} cy={youNode.y} r={12} fill="#22d3ee" stroke="#fff" strokeWidth={2.5} />
-      <text x={youNode.x} y={youNode.y + 25} textAnchor="middle" fontSize={10} fill="#22d3ee" fontWeight="700">YOU</text>
+        return (
+          <g key={r.id} style={{ animation: "fadeIn 0.3s ease" }}>
+            {/* Destination glow ring */}
+            {isDest && (
+              <rect
+                x={r.x - 4} y={r.y - 4}
+                width={r.w + 8} height={r.h + 8}
+                rx={11} fill="none"
+                stroke="#f59e0b" strokeWidth={2} opacity={0.4}
+                style={{ animation: "destPulse 1.5s ease-in-out infinite" }}
+              />
+            )}
 
-      <defs><style>{`@keyframes dashMove{to{stroke-dashoffset:-21}}`}</style></defs>
+            {/* Room body */}
+            <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={8}
+              fill={fill(r.id, pathSet, destination, floor.occupied)}
+              stroke={strokeColor(r.id, pathSet, destination, floor.occupied)}
+              strokeWidth={isDest ? 2.5 : isOnPath ? 2 : 1.5}
+              style={{ transition: "fill 0.3s ease, stroke 0.3s ease" }}
+            />
+
+            {/* Room type color bar on left */}
+            <rect x={r.x} y={r.y} width={5} height={r.h} rx={8}
+              fill={isOccupied ? "#ef4444" : isDest ? "#f59e0b" : typeInfo.stroke}
+              opacity={0.8}
+            />
+
+            {/* Icon */}
+            <text
+              x={r.x + 22} y={r.y + r.h / 2 + 6}
+              textAnchor="middle" fontSize={18}
+            >
+              {isOccupied ? "🔴" : isDest ? "📍" : typeInfo.icon}
+            </text>
+
+            {/* Room label */}
+            <text
+              x={r.x + r.w / 2 + 10}
+              y={r.y + r.h / 2 + (isOccupied ? -8 : 5)}
+              textAnchor="middle"
+              fontSize={r.w < 150 ? 10 : 13}
+              fontWeight="600"
+              fill={isDest ? "#fbbf24" : isOnPath ? "#e2e8f0" : "#94a3b8"}
+              style={{ transition: "fill 0.3s ease" }}
+            >
+              {r.label}
+            </text>
+
+            {/* Occupied badge */}
+            {isOccupied && (
+              <text x={r.x + r.w / 2 + 10} y={r.y + r.h / 2 + 14}
+                textAnchor="middle" fontSize={10} fill="#f87171" fontWeight="600">
+                ● Occupied
+              </text>
+            )}
+
+            {/* Destination badge */}
+            {isDest && (
+              <text x={r.x + r.w / 2 + 10} y={r.y + r.h / 2 + 20}
+                textAnchor="middle" fontSize={9} fill="#fbbf24" fontWeight="700">
+                ▼ DESTINATION
+              </text>
+            )}
+          </g>
+        )
+      })}
+
+      {/* YOU dot */}
+      <circle cx={youNode.x} cy={youNode.y} r={12}
+        fill="#22d3ee" stroke="#fff" strokeWidth={2.5}
+        style={{ animation: "pulse 2s ease-in-out infinite" }}
+        filter="url(#glow)"
+      />
+      <text x={youNode.x} y={youNode.y + 26}
+        textAnchor="middle" fontSize={10} fill="#22d3ee" fontWeight="700">
+        YOU
+      </text>
     </svg>
   )
 }
 
-const BLOCKS = {
-  nirmithi: {
-    name: "Nirmithi Block",
-    floors: FLOORS // Uses the FLOORS map we defined above
-  },
-  srujan: {
-    name: "Srujan Block",
-    floors: {}
-  },
-  aakash: {
-    name: "Aakash Block",
-    floors: {}
-  }
+// ── Legend pill ───────────────────────────────────────────────────────────────
+function LegendPill({ color, icon, label }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      background: "#1e293b", border: `1px solid ${color}44`,
+      borderRadius: 20, padding: "4px 10px", fontSize: 12, color: "#94a3b8",
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, display: "inline-block" }} />
+      {icon} {label}
+    </span>
+  )
 }
 
+// ── Step item ─────────────────────────────────────────────────────────────────
+function StepItem({ num, text, isFirst, isLast }) {
+  const isStairs = text.toLowerCase().includes("stair")
+  return (
+    <li style={{
+      display: "flex", alignItems: "flex-start", gap: 12,
+      padding: "10px 0",
+      borderBottom: isLast ? "none" : "1px solid #1e293b",
+      animation: "fadeIn 0.3s ease both",
+      animationDelay: `${num * 0.07}s`,
+    }}>
+      <span style={{
+        minWidth: 26, height: 26, borderRadius: "50%",
+        background: isFirst ? "#22d3ee22" : isStairs ? "#3b82f622" : "#f59e0b22",
+        border: `1.5px solid ${isFirst ? "#22d3ee" : isStairs ? "#3b82f6" : "#f59e0b"}`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 11, fontWeight: 700,
+        color: isFirst ? "#22d3ee" : isStairs ? "#3b82f6" : "#f59e0b",
+      }}>
+        {num}
+      </span>
+      <span style={{ color: "#cbd5e1", fontSize: 13, lineHeight: 1.5, paddingTop: 3 }}>
+        {isFirst ? "🟢 " : isStairs ? "🪜 " : "➡️ "}{text}
+      </span>
+    </li>
+  )
+}
+
+// ── Block data ────────────────────────────────────────────────────────────────
+const BLOCKS = {
+  nirmithi: { name: "Nirmithi Block", floors: FLOORS },
+  srujan: { name: "Srujan Block", floors: {} },
+  aakash: { name: "Aakash Block", floors: {} },
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function IndoorNavigation() {
   const [activeBlock, setActiveBlock] = useState("nirmithi")
   const [activeFloor, setActiveFloor] = useState(3)
   const [dest, setDest] = useState("")
   const [path, setPath] = useState([])
   const [error, setError] = useState("")
+  const [animating, setAnimating] = useState(false)
 
   const blockData = BLOCKS[activeBlock]
   const floorConfig = blockData.floors[activeFloor]
 
-  // Flatten all destinations across all known floors for the active block
   const destOptions = useMemo(() => {
     const opts = []
     if (blockData.floors) {
@@ -232,31 +377,21 @@ export default function IndoorNavigation() {
       })
     }
     return opts.sort((a, b) => a.label.localeCompare(b.label))
-  }, [activeBlock])
+  }, [blockData.floors])
 
   function handleDestChange(val) {
-    setDest(val)
-    setPath([])
-    setError("")
+    setDest(val); setPath([]); setError("")
     if (val) {
       const found = destOptions.find(o => o.id === val)
-      if (found) {
-        setActiveFloor(found.floorId)
-      }
+      if (found) setActiveFloor(found.floorId)
     }
   }
 
   function handleBlockChange(e) {
-    setActiveBlock(e.target.value)
-    setDest("")
-    setPath([])
-    setError("")
-
-    // Auto switch to top floor of new block if it exists
+    setActiveBlock(e.target.value); setDest(""); setPath([]); setError("")
     const bData = BLOCKS[e.target.value]
-    if (bData && bData.floors && Object.keys(bData.floors).length > 0) {
-      const topFloor = Math.max(...Object.keys(bData.floors).map(Number))
-      setActiveFloor(topFloor)
+    if (bData?.floors && Object.keys(bData.floors).length > 0) {
+      setActiveFloor(Math.max(...Object.keys(bData.floors).map(Number)))
     }
   }
 
@@ -264,103 +399,172 @@ export default function IndoorNavigation() {
     setError("")
     if (!dest) { setError("Select a destination."); return }
     if (!floorConfig) { setError("Floor layout not available yet."); return }
-
-    const nodes = floorConfig.nodes
-    const edges = floorConfig.edges
-    const currentNode = "stairs" // fixed spawn
-
-    const result = astar(nodes, edges, currentNode, dest)
-    if (!result || !result.length) { setError("No route found on this floor."); return }
+    const result = astar(floorConfig.nodes, floorConfig.edges, "stairs", dest)
+    if (!result?.length) { setError("No route found on this floor."); return }
+    setAnimating(true)
     setPath(result)
+    setTimeout(() => setAnimating(false), 800)
   }
 
-  function handleReset() { setPath([]); setDest(""); setError("") }
-
-  // Assume Entrance/Stairs is Ground Floor or Floor 1. We'll use 1 as default starting floor.
-  const startingFloor = 1
+  function handleReset() { setPath([]); setDest(""); setError(""); setAnimating(false) }
 
   const steps = path && floorConfig?.nodes
-    ? path
-      .map(id => floorConfig.nodes[id]?.label)
-      .filter(Boolean)
-      .filter(l => !l.startsWith("Corridor"))
+    ? path.map(id => floorConfig.nodes[id]?.label).filter(Boolean).filter(l => !l.startsWith("Corridor"))
     : []
 
-  // Feature 6: Inject floor transition instructions
-  if (path.length > 0 && activeFloor !== startingFloor) {
-    // Usually the first non-corridor step is "Stairs". We want to insert the transition after it.
-    if (steps[0] === "Stairs") {
-      steps.splice(1, 0, `Take stairs to Floor ${activeFloor}`)
-    } else {
-      // Fallback if "Stairs" isn't the first node for some reason
-      steps.unshift(`Take stairs to Floor ${activeFloor}`)
-    }
+  if (path.length > 0 && activeFloor !== 1) {
+    if (steps[0] === "Stairs") steps.splice(1, 0, `Take stairs to Floor ${activeFloor}`)
+    else steps.unshift(`Take stairs to Floor ${activeFloor}`)
   }
 
+  const destLabel = destOptions.find(d => d.id === dest)?.label.split(" (Floor")[0]
+
   return (
-    <div className="indoor-container">
-      <div className="indoor-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="indoor-container" style={{ fontFamily: "inherit" }}>
+      <style>{`
+        @keyframes fadeIn { from { opacity:0; transform:translateY(6px) } to { opacity:1; transform:translateY(0) } }
+        .block-select { padding:.5rem .75rem; border-radius:10px; background:#1e293b; color:white; border:1px solid #334155; outline:none; cursor:pointer; font-weight:500; transition:border-color .2s; }
+        .block-select:hover { border-color:#f59e0b88; }
+        .nav-btn { padding:.55rem 1.2rem; border-radius:10px; font-weight:700; font-size:14px; cursor:pointer; border:none; transition:all .2s; }
+        .nav-btn-primary { background:linear-gradient(135deg,#f59e0b,#ea580c); color:#000; }
+        .nav-btn-primary:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 4px 16px #f59e0b44; }
+        .nav-btn-primary:disabled { opacity:.4; cursor:not-allowed; }
+        .nav-btn-secondary { background:#1e293b; color:#94a3b8; border:1px solid #334155; }
+        .nav-btn-secondary:hover { border-color:#f59e0b44; color:#e2e8f0; }
+        .floor-tab { padding:.35rem .9rem; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; border:1px solid transparent; transition:all .2s; color:#64748b; background:transparent; }
+        .floor-tab.active { background:#f59e0b22; border-color:#f59e0b66; color:#f59e0b; }
+        .floor-tab:hover:not(.active) { border-color:#334155; color:#94a3b8; }
+      `}</style>
+
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div>
-          <h2>Indoor Navigation</h2>
+          <h2 style={{ margin: 0, fontSize: "1.4rem", fontWeight: 800, color: "#e2e8f0" }}>
+            Indoor Navigation
+          </h2>
           {dest && floorConfig && (
-            <p style={{ display: 'inline-block', background: '#3b82f6', color: 'white', padding: '2px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 'bold' }}>
+            <span style={{
+              display: "inline-block", marginTop: 4,
+              background: "#1d4ed822", color: "#60a5fa",
+              border: "1px solid #1d4ed844",
+              padding: "2px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+            }}>
               Floor {activeFloor}
-            </p>
+            </span>
           )}
         </div>
-        <select className="floor-select" value={activeBlock} onChange={handleBlockChange} style={{ padding: '0.5rem', borderRadius: '8px', background: '#1e293b', color: 'white', border: '1px solid #334155', outline: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: '500' }}>
+        <select className="block-select" value={activeBlock} onChange={handleBlockChange}>
           {Object.entries(BLOCKS).map(([key, data]) => (
             <option key={key} value={key}>{data.name}</option>
           ))}
         </select>
       </div>
 
-      <div className="indoor-controls">
-        <DestinationSearch
-          label="Global Room Search" placeholder="Type a room name..."
-          options={destOptions} value={dest} onChange={handleDestChange}
-          emptyMessage="Room not found. Try another block."
-        />
-        <button className="route-cta" onClick={handleNavigate} disabled={!dest || !floorConfig}>Navigate</button>
+      {/* Controls */}
+      <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap", marginBottom: "1rem" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <DestinationSearch
+            label="Global Room Search"
+            placeholder="Type a room name..."
+            options={destOptions}
+            value={dest}
+            onChange={handleDestChange}
+            emptyMessage="Room not found. Try another block."
+          />
+        </div>
+        <button className="nav-btn nav-btn-primary" onClick={handleNavigate} disabled={!dest || !floorConfig}>
+          Navigate →
+        </button>
         {path.length > 0 && (
-          <button className="route-button secondary" onClick={handleReset}>Reset</button>
+          <button className="nav-btn nav-btn-secondary" onClick={handleReset}>
+            ✕ Reset
+          </button>
         )}
-        {error && <span className="campus-map-error">{error}</span>}
       </div>
+
+      {error && (
+        <p style={{
+          color: "#f87171", fontSize: 13, margin: "0 0 .75rem",
+          background: "#7f1d1d22", border: "1px solid #7f1d1d", borderRadius: 8, padding: "6px 12px"
+        }}>
+          ⚠️ {error}
+        </p>
+      )}
 
       {floorConfig ? (
         <>
-          <div style={{ display: "flex", gap: "1rem", fontSize: "0.8rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-            <span style={{ color: "#22d3ee" }}>You (Stairs)</span>
-            <span style={{ color: "#f59e0b" }}>Destination</span>
-            <span style={{ color: "#ef4444" }}>Occupied</span>
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: "1rem" }}>
+            <LegendPill color="#22d3ee" icon="📍" label="You (Stairs)" />
+            <LegendPill color="#f59e0b" icon="🎯" label="Destination" />
+            <LegendPill color="#ef4444" icon="🔴" label="Occupied" />
+            <LegendPill color="#3b82f6" icon="🎓" label="Classroom" />
+            <LegendPill color="#22c55e" icon="🔬" label="Lab" />
+            <LegendPill color="#f97316" icon="🏢" label="Office" />
           </div>
 
+          {/* Floor tabs */}
+          <div style={{ display: "flex", gap: 6, marginBottom: "1rem" }}>
+            {Object.keys(blockData.floors).sort((a, b) => b - a).map(f => (
+              <button key={f}
+                className={`floor-tab ${activeFloor === Number(f) ? "active" : ""}`}
+                onClick={() => setActiveFloor(Number(f))}>
+                Floor {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Map + Steps */}
           <div className="indoor-map-layout">
-            <FloorPlan floorId={activeFloor} path={path} destination={dest} currentNode={"stairs"} />
+            <FloorPlan
+              floorId={activeFloor}
+              path={path}
+              destination={dest}
+              currentNode="stairs"
+              animating={animating}
+            />
+
             {path.length > 0 && (
-              <div className="indoor-steps">
-                <h3>Route to {destOptions.find(d => d.id === dest)?.label.split(" (Floor")[0]}</h3>
-                <p style={{ color: "#64748b", fontSize: "0.8rem", margin: "0 0 0.75rem" }}>
+              <div className="indoor-steps" style={{
+                background: "#0f172a", borderRadius: 14,
+                border: "1px solid #1e293b", padding: "1.25rem",
+                animation: "fadeIn 0.4s ease",
+              }}>
+                <h3 style={{ margin: "0 0 .25rem", fontSize: "1rem", color: "#f59e0b", fontWeight: 800 }}>
+                  Route to {destLabel}
+                </h3>
+                <p style={{ color: "#475569", fontSize: 12, margin: "0 0 1rem" }}>
                   {floorConfig.title}
                 </p>
                 <ol style={{ padding: 0, listStyle: "none", margin: 0 }}>
                   {steps.map((s, i) => (
-                    <li key={i} className="indoor-step">
-                      <span className="step-num">{i + 1}</span>{s}
-                    </li>
+                    <StepItem
+                      key={i} num={i + 1} text={s}
+                      isFirst={i === 0} isLast={i === steps.length - 1}
+                    />
                   ))}
                 </ol>
+                <div style={{
+                  marginTop: "1rem", padding: "8px 12px",
+                  background: "#f59e0b11", borderRadius: 8,
+                  border: "1px solid #f59e0b33",
+                  fontSize: 12, color: "#f59e0b",
+                }}>
+                  🏁 {steps.length} steps · Est. {steps.length * 15}s walk
+                </div>
               </div>
             )}
           </div>
         </>
       ) : (
-        <div className="indoor-map-layout" style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-          <p>No indoor maps available for this block yet.</p>
+        <div style={{
+          textAlign: "center", padding: "3rem", color: "#334155",
+          background: "#0f172a", borderRadius: 14, border: "1px dashed #1e293b"
+        }}>
+          <p style={{ fontSize: "2rem", margin: "0 0 .5rem" }}>🏗️</p>
+          <p style={{ margin: 0 }}>No indoor maps available for this block yet.</p>
         </div>
       )}
     </div>
   )
 }
-

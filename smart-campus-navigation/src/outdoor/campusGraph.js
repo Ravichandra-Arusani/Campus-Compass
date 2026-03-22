@@ -318,6 +318,9 @@ export const CAMPUS_GRAPH_NODES = Object.freeze({
   "17.470833|78.721480": { lat: 17.470833, lng: 78.721480 },
   "17.470987|78.723604": { lat: 17.470987, lng: 78.723604 },
   "17.470998|78.723508": { lat: 17.470998, lng: 78.723508 },
+  "17.470780|78.723508": { lat: 17.470780, lng: 78.723508 },
+  "17.470600|78.723508": { lat: 17.470600, lng: 78.723508 },
+  "17.470445|78.723450": { lat: 17.470445, lng: 78.723450 },
   "17.471109|78.721523": { lat: 17.471109, lng: 78.721523 },
   "17.471116|78.723026": { lat: 17.471116, lng: 78.723026 },
   "17.471275|78.722199": { lat: 17.471275, lng: 78.722199 },
@@ -340,7 +343,7 @@ export const CAMPUS_GRAPH_ADJACENCY = Object.freeze({
   "17.470056|78.721792": ["17.469951|78.721754", "17.470035|78.722028", "17.470392|78.721797"],
   "17.470261|78.721415": ["17.469999|78.721380", "17.470575|78.721449"],
   "17.470392|78.721797": ["17.470056|78.721792", "17.470500|78.721891", "17.470541|78.721728"],
-  "17.470445|78.723398": ["17.469897|78.723295", "17.470998|78.723508"],
+  "17.470445|78.723398": ["17.469897|78.723295", "17.470445|78.723450"],
   "17.470500|78.721891": ["17.470392|78.721797", "17.470578|78.721872"],
   "17.470541|78.721728": ["17.470392|78.721797", "17.470575|78.721449", "17.470632|78.721810"],
   "17.470575|78.721449": ["17.470261|78.721415", "17.470541|78.721728", "17.470833|78.721480"],
@@ -348,7 +351,10 @@ export const CAMPUS_GRAPH_ADJACENCY = Object.freeze({
   "17.470632|78.721810": ["17.470541|78.721728", "17.470578|78.721872", "17.471312|78.721952"],
   "17.470833|78.721480": ["17.470575|78.721449", "17.471109|78.721523"],
   "17.470987|78.723604": ["17.470998|78.723508"],
-  "17.470998|78.723508": ["17.470445|78.723398", "17.470987|78.723604", "17.471116|78.723026"],
+  "17.470998|78.723508": ["17.470780|78.723508", "17.470987|78.723604", "17.471116|78.723026"],
+  "17.470780|78.723508": ["17.470998|78.723508", "17.470600|78.723508"],
+  "17.470600|78.723508": ["17.470780|78.723508", "17.470445|78.723450"],
+  "17.470445|78.723450": ["17.470600|78.723508", "17.470445|78.723398"],
   "17.471109|78.721523": ["17.470833|78.721480", "17.471363|78.721552"],
   "17.471116|78.723026": ["17.470998|78.723508", "17.471275|78.722199"],
   "17.471275|78.722199": ["17.471116|78.723026", "17.471312|78.721952"],
@@ -368,7 +374,7 @@ function distanceLatLngMeters(aLat, aLng, bLat, bLng) {
   return distanceMeters({ x: aLat, y: aLng }, { x: bLat, y: bLng })
 }
 
-export function snapToNearestNode(lat, lng, graphOverride = null, maxSnapMeters = 40) {
+export function snapToNearestNode(lat, lng, graphOverride = null, maxSnapMeters = 150) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return null
   }
@@ -480,4 +486,33 @@ export function dijkstra(startKey, endKey, graphOverride = null) {
   }
 
   return path.length > 1 ? path : null
+}
+
+export function buildSimpleGraph(geojson) {
+  const nodes = {}
+  const adjacency = {}
+
+  if (!geojson || !geojson.features) return { nodes, adjacency }
+
+  geojson.features.forEach(feature => {
+    if (feature.geometry.type !== 'LineString') return
+    const coords = feature.geometry.coordinates
+
+    coords.forEach(([lng, lat], i) => {
+      const key = `${lat}|${lng}`
+      nodes[key] = { lat, lng }
+      if (!adjacency[key]) adjacency[key] = []
+
+      // Connect to previous node
+      if (i > 0) {
+        const [pLng, pLat] = coords[i - 1]
+        const prevKey = `${pLat}|${pLng}`
+        if (!adjacency[key].includes(prevKey)) adjacency[key].push(prevKey)
+        if (!adjacency[prevKey]) adjacency[prevKey] = []
+        if (!adjacency[prevKey].includes(key)) adjacency[prevKey].push(key)
+      }
+    })
+  })
+
+  return { nodes, adjacency }
 }

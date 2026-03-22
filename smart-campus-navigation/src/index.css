@@ -179,7 +179,7 @@ body {
   flex-direction: column;
   gap: 0.75rem;
   width: 100%;
-  height: 100%;
+  height: 80vh;
   overflow: visible !important;
 }
 
@@ -200,6 +200,73 @@ body {
 .campus-map-error {
   font-size: 0.84rem;
   color: #ffd2cf;
+}
+
+/* Building confirmation prompt */
+.building-confirm-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  background: rgba(255, 122, 26, 0.12);
+  border: 1px solid rgba(255, 122, 26, 0.45);
+  border-radius: 10px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.84rem;
+  color: #fff7f0;
+  animation: building-confirm-fadein 180ms ease;
+}
+
+@keyframes building-confirm-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.building-confirm-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.building-confirm-text strong {
+  color: #ffb07a;
+}
+
+.building-confirm-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.building-confirm-yes,
+.building-confirm-no {
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.65rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.building-confirm-yes {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.55);
+  color: #86efac;
+}
+
+.building-confirm-yes:hover {
+  background: rgba(34, 197, 94, 0.35);
+  color: #fff;
+}
+
+.building-confirm-no {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.building-confirm-no:hover {
+  background: rgba(239, 68, 68, 0.28);
+  color: #fff;
 }
 
 .campus-overview-row {
@@ -280,7 +347,7 @@ body {
   position: relative;
   z-index: 1 !important;
   width: 100%;
-  height: 620px;
+  height: 80vh !important;
   border-radius: 20px;
   border: 1px solid rgba(255, 122, 26, 0.12);
   overflow: hidden;
@@ -2169,5 +2236,531 @@ body {
 @media (max-width: 640px) {
   .indoor-map-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   NavigationPanel styles
+   ========================================================= */
+.nav-panel-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+}
+
+.nav-panel-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: rgba(245, 245, 245, 0.82);
+  flex: 1;
+  min-width: 160px;
+}
+
+.nav-panel-select {
+  border: 1px solid rgba(245, 245, 245, 0.2);
+  border-radius: 9px;
+  background: rgba(12, 12, 12, 0.9);
+  color: #f5f5f5;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.nav-panel-btn {
+  border: 1px solid rgba(255, 122, 26, 0.6);
+  border-radius: 10px;
+  background: rgba(255, 122, 26, 0.18);
+  color: #ff9a52;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 0.65rem 1.2rem;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+  white-space: nowrap;
+}
+
+.nav-panel-btn:hover:not(:disabled) {
+  background: rgba(255, 122, 26, 0.35);
+  color: #fff;
+}
+
+.nav-panel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nav-result {
+  border: 1px solid rgba(41, 121, 255, 0.28);
+  border-radius: 14px;
+  background: rgba(4, 8, 20, 0.6);
+  padding: 0.85rem 1rem;
+  margin-top: 0.75rem;
+}
+
+.nav-result-summary {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.nav-result-stat {
+  font-size: 0.9rem;
+  color: rgba(245, 245, 245, 0.8);
+}
+
+.nav-result-stat strong {
+  color: #ff9a52;
+  font-size: 1.05rem;
+}
+
+.nav-steps-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.nav-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  font-size: 0.88rem;
+  color: rgba(245, 245, 245, 0.84);
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nav-step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #ff7a1a;
+  color: #000;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* =========================================================
+   AdminPanel styles
+   ========================================================= */
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 480px;
+}
+
+.admin-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  color: rgba(245, 245, 245, 0.82);
+}
+
+.admin-input {
+  border: 1px solid rgba(245, 245, 245, 0.2);
+  border-radius: 9px;
+  background: rgba(12, 12, 12, 0.9);
+  color: #f5f5f5;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.admin-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.admin-logout-btn {
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 9px;
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 0.82rem;
+  padding: 0.45rem 0.85rem;
+  cursor: pointer;
+  transition: background 150ms;
+  flex-shrink: 0;
+}
+
+.admin-logout-btn:hover {
+  background: rgba(239, 68, 68, 0.28);
+  color: #fff;
+}
+
+/* =========================================================
+   RoomAvailability — real API version
+   ========================================================= */
+.availability-lookup-bar {
+  display: flex;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.availability-lookup-bar .admin-input {
+  flex: 1;
+  min-width: 160px;
+}
+
+.lookup-result-card {
+  border: 1px solid rgba(255, 122, 26, 0.35);
+  border-radius: 14px;
+  background: rgba(20, 12, 4, 0.6);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.lookup-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.lookup-result-head h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #fff;
+}
+
+.lookup-result-head p {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: rgba(245, 245, 245, 0.65);
+}
+
+.lookup-capacity {
+  font-size: 0.84rem;
+  color: rgba(245, 245, 245, 0.72);
+  margin: 0.25rem 0 0;
+}
+
+.alternate-room-card {
+  margin-top: 0.8rem;
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  border-radius: 10px;
+  background: rgba(4, 28, 12, 0.6);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.86rem;
+  color: rgba(245, 245, 245, 0.88);
+}
+
+.alternate-room-label {
+  margin: 0 0 0.35rem;
+  color: #4ade80;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.alternate-room-none {
+  margin-top: 0.6rem;
+  font-size: 0.82rem;
+  color: rgba(245, 245, 245, 0.55);
+}
+
+.availability-building-group {
+  margin-bottom: 1.5rem;
+}
+
+.availability-building-name {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+  color: rgba(255, 154, 82, 0.92);
+  border-bottom: 1px solid rgba(255, 122, 26, 0.18);
+  padding-bottom: 0.35rem;
+}
+
+.availability-room-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.65rem;
+}
+
+.availability-room-card {
+  border: 1px solid rgba(245, 245, 245, 0.12);
+  border-radius: 11px;
+  background: rgba(10, 10, 10, 0.6);
+  padding: 0.6rem 0.75rem;
+}
+
+.availability-room-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.availability-room-head strong {
+  display: block;
+  font-size: 0.92rem;
+  color: #fff;
+}
+
+.availability-room-name {
+  display: block;
+  font-size: 0.76rem;
+  color: rgba(245, 245, 245, 0.62);
+}
+
+.availability-room-meta {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.76rem;
+  color: rgba(245, 245, 245, 0.58);
+}
+
+.status-badge {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.18rem 0.6rem;
+  letter-spacing: 0.04em;
+}
+
+.status-badge.available {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.35);
+}
+
+.status-badge.occupied {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+/* =========================================================
+   Phase 2: GPS, 3D Map, Differentiator Banner & Room Sidebar
+   ========================================================= */
+
+/* Pulsing GPS Marker */
+.gps-pulse-marker {
+  width: 24px;
+  height: 24px;
+  background-color: #ff7a1a;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #ff7a1a, 0 0 20px #ff7a1a;
+  animation: gpsPulse 1.5s infinite;
+  border: 2px solid white;
+}
+
+@keyframes gpsPulse {
+  0% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(255, 122, 26, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(255, 122, 26, 0); }
+  100% { transform: scale(0.8); box-shadow: 0 0 0 0 rgba(255, 122, 26, 0); }
+}
+
+
+
+/* Classroom Sidebar */
+.map-overlay-sidebar {
+  width: 320px;
+  background: rgba(15, 15, 15, 0.95);
+  border-left: 1px solid rgba(255, 122, 26, 0.3);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 600px;
+  z-index: 1000;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.classroom-sidebar-head {
+  padding: 1rem;
+  background: rgba(255, 122, 26, 0.1);
+  border-bottom: 1px solid rgba(255, 122, 26, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.classroom-sidebar-head h3 {
+  margin: 0;
+  color: #ff9a52;
+  font-size: 1.1rem;
+}
+
+.classroom-sidebar-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sidebar-room-card {
+  background: rgba(25, 25, 25, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.8rem;
+  border-radius: 8px;
+}
+
+.sidebar-room-card.available {
+  border-left: 3px solid #4ade80;
+}
+
+.sidebar-room-card.occupied {
+  border-left: 3px solid #f87171;
+}
+
+.sidebar-room-name {
+  font-size: 0.8rem;
+  color: #aaa;
+  margin: 0.3rem 0 0.8rem 0;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot.available { background: #4ade80; box-shadow: 0 0 5px #4ade80; }
+.status-dot.occupied { background: #f87171; box-shadow: 0 0 5px #f87171; }
+
+.sidebar-route-btn {
+  width: 100%;
+  padding: 0.6rem;
+  background: rgba(74, 222, 128, 0.15);
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  color: #4ade80;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.sidebar-route-btn:hover {
+  background: rgba(74, 222, 128, 0.3);
+}
+
+.sidebar-occupied-text {
+  color: #f87171;
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem 0;
+  font-weight: 600;
+}
+
+.sidebar-route-btn.alternate {
+  background: rgba(255, 122, 26, 0.15);
+  border-color: rgba(255, 122, 26, 0.4);
+  color: #ff9a52;
+}
+.sidebar-route-btn.alternate:hover {
+  background: rgba(255, 122, 26, 0.3);
+}
+
+/* Route Steps Popover */
+.route-steps-popover {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 300px;
+  background: rgba(15, 15, 15, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(41, 121, 255, 0.4);
+  padding: 1rem;
+  border-radius: 12px;
+  z-index: 1000;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  color: white;
+}
+.route-steps-popover h4 {
+  margin: 0 0 10px 0;
+  color: #60a5fa;
+}
+.route-steps-popover ol {
+  padding-left: 20px;
+  margin: 0 0 15px 0;
+  font-size: 0.85rem;
+  color: #ccc;
+}
+.route-steps-popover li {
+  margin-bottom: 6px;
+}
+
+/* Popup overrides */
+.building-popup {
+  background: #1a1a2e;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.building-popup .popup-name {
+  font-weight: bold;
+  font-size: 14px;
+  margin-top: 4px;
+}
+.building-popup .popup-type {
+  font-size: 12px;
+  color: #aaa;
+}
+
+/* Override Maplibre default popup styles */
+.leaflet-popup-content-wrapper,
+.maplibregl-popup-content {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+.leaflet-popup-tip,
+.maplibregl-popup-tip {
+  display: none !important;
+}
+
+/* Reset 3D button */
+.reset-3d-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+}
+
+/* Responsive updates */
+@media (max-width: 768px) {
+  .campus-map-canvas { 
+    height: 75vh !important; 
+  }
+  .map-controls { 
+    flex-direction: column; 
+    gap: 8px; 
+  }
+  .route-buttons { 
+    display: flex; 
+    gap: 8px; 
+    width: 100%; 
+  }
+  .route-buttons button { 
+    flex: 1; 
+  }
+  .filter-chips { 
+    overflow-x: auto; 
+    white-space: nowrap; 
+    padding-bottom: 4px; 
   }
 }

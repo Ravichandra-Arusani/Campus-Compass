@@ -7,6 +7,90 @@ from django.dispatch import receiver
 from django.utils import timezone
 
 
+# ---------------------------------------------------------------------------
+# Campus-level models used by the new navigate + availability APIs
+# ---------------------------------------------------------------------------
+
+
+class CampusBuilding(models.Model):
+    """Building with GPS coordinates — used for seed_campus and availability API."""
+    name = models.CharField(max_length=100, unique=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    short_code = models.CharField(max_length=20, unique=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Classroom(models.Model):
+    """Classroom / lab within a CampusBuilding, with available/occupied status."""
+
+    class Status(models.TextChoices):
+        AVAILABLE = "available", "Available"
+        OCCUPIED = "occupied", "Occupied"
+
+    room_id = models.CharField(max_length=32, unique=True)  # e.g. "N302"
+    name = models.CharField(max_length=100)
+    building = models.ForeignKey(
+        CampusBuilding, related_name="classrooms", on_delete=models.CASCADE
+    )
+    floor = models.IntegerField(default=1)
+    capacity = models.IntegerField(default=40)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.AVAILABLE
+    )
+
+    def __str__(self):
+        return f"{self.room_id} — {self.name} ({self.status})"
+
+
+class CampusNode(models.Model):
+    """Navigation node in the campus graph (outdoor + indoor)."""
+
+    class NodeType(models.TextChoices):
+        OUTDOOR = "outdoor", "Outdoor"
+        INDOOR = "indoor", "Indoor"
+        ENTRY = "entry", "Entry"
+        CORRIDOR = "corridor", "Corridor"
+        STAIRCASE = "staircase", "Staircase"
+
+    node_id = models.CharField(max_length=64, unique=True)  # e.g. "MAIN_GATE"
+    name = models.CharField(max_length=100)
+    node_type = models.CharField(
+        max_length=16, choices=NodeType.choices, default=NodeType.OUTDOOR
+    )
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    floor = models.IntegerField(null=True, blank=True)
+    building = models.ForeignKey(
+        CampusBuilding, null=True, blank=True, on_delete=models.SET_NULL
+    )
+
+    def __str__(self):
+        return f"{self.node_id} ({self.node_type})"
+
+
+class CampusEdge(models.Model):
+    """Directed edge between two CampusNodes."""
+
+    from_node = models.ForeignKey(
+        CampusNode, related_name="outgoing_campus_edges", on_delete=models.CASCADE
+    )
+    to_node = models.ForeignKey(
+        CampusNode, related_name="incoming_campus_edges", on_delete=models.CASCADE
+    )
+    distance = models.FloatField(default=0.0)
+    bidirectional = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ("from_node", "to_node")
+
+    def __str__(self):
+        arrow = "<->" if self.bidirectional else "->"
+        return f"{self.from_node.node_id} {arrow} {self.to_node.node_id}"
+
+
 class Building(models.Model):
     name = models.CharField(max_length=100, unique=True)
     x = models.FloatField()

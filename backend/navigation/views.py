@@ -16,6 +16,10 @@ from rest_framework.response import Response
 
 from .models import (
     Building,
+    CampusBuilding,
+    CampusEdge,
+    CampusNode,
+    Classroom,
     GraphVersion,
     NavigationSession,
     NavigationSessionNodeUsage,
@@ -36,6 +40,298 @@ from .serializers import (
     RouteRequestSerializer,
 )
 from .throttles import AnalyticsExportThrottle, AnalyticsThrottle, NavigationSessionThrottle
+
+
+# ---------------------------------------------------------------------------
+# Helper: Dijkstra on CampusNode / CampusEdge graph
+# ---------------------------------------------------------------------------
+
+def _build_campus_graph():
+    """Build adjacency dict from CampusEdge table. Bidirectional edges added both ways."""
+    graph = {}
+    for node in CampusNode.objects.all():
+        graph[node.node_id] = {}
+    for edge in CampusEdge.objects.select_related("from_node", "to_node").all():
+        fid = edge.from_node.node_id
+        tid = edge.to_node.node_id
+        graph.setdefault(fid, {})[tid] = edge.distance
+        if edge.bidirectional:
+            graph.setdefault(tid, {})[fid] = edge.distance
+    return graph
+
+
+def _dijkstra(graph, source, destination):
+    """Return (path_list, total_distance) or raise ValueError."""
+    import heapq
+    dist = {node: float('inf') for node in graph}
+    prev = {}
+    dist[source] = 0
+    heap = [(0, source)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if d > dist[u]:
+            continue
+        if u == destination:
+            break
+        for v, w in graph.get(u, {}).items():
+            nd = dist[u] + w
+            if nd < dist[v]:
+                dist[v] = nd
+                prev[v] = u
+                heapq.heappush(heap, (nd, v))
+    if dist[destination] == float('inf'):
+        raise ValueError(f"No path from {source} to {destination}")
+    path = []
+    cur = destination
+    while cur in prev:
+        path.append(cur)
+        cur = prev[cur]
+    path.append(source)
+    path.reverse()
+    return path, dist[destination]
+
+
+def _make_step(node):
+    """Generate human-readable navigation instruction for a node."""
+    nt = node.node_type
+    name = node.name
+    floor = node.floor
+    if nt == CampusNode.NodeType.CORRIDOR:
+        return f"Walk along corridor to {name}"
+    if nt == CampusNode.NodeType.STAIRCASE:
+        floor_str = f"floor {floor}" if floor is not None else "next floor"
+        return f"Take the staircase to {floor_str}"
+    if nt == CampusNode.NodeType.ENTRY:
+        return f"Enter building through {name}"
+    if nt == CampusNode.NodeType.INDOOR:
+        return f"Proceed to room {name}"
+    return f"Head to {name}"
+
+
+# ---------------------------------------------------------------------------
+# Navigate API  GET /api/navigate/?source=X&destination=Y
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def campus_navigate(request):
+    source_id = (request.query_params.get("source") or "").strip()
+    dest_id = (request.query_params.get("destination") or "").strip()
+
+    if not source_id or not dest_id:
+        return Response(
+            {"error": "Both 'source' and 'destination' query params are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate nodes exist
+    node_lookup = {n.node_id: n for n in CampusNode.objects.select_related("building").all()}
+    if source_id not in node_lookup:
+        return Response(
+            {"error": f"Source node '{source_id}' not found in campus graph."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if dest_id not in node_lookup:
+        return Response(
+            {"error": f"Destination node '{dest_id}' not found in campus graph."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if source_id == dest_id:
+        return Response(
+            {"error": "Source and destination must be different nodes."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    graph = _build_campus_graph()
+    if source_id not in graph or dest_id not in graph:
+        return Response(
+            {"error": "One or both nodes are not connected in the graph."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        path, total_distance = _dijkstra(graph, source_id, dest_id)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+
+    path_nodes = [node_lookup[nid] for nid in path]
+    steps = [_make_step(n) for n in path_nodes]
+    coords = [
+        {"lat": n.latitude, "lng": n.longitude}
+        for n in path_nodes
+        if n.latitude is not None and n.longitude is not None
+    ]
+
+    return Response({
+        "path": path,
+        "total_distance": round(total_distance, 2),
+        "steps": steps,
+        "coords": coords,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Availability API
+# ---------------------------------------------------------------------------
+
+def _find_nearest_available(building_id, floor, exclude_room_id=None):
+    qs = Classroom.objects.filter(
+        building_id=building_id,
+        floor=floor,
+        status=Classroom.Status.AVAILABLE,
+    )
+    if exclude_room_id:
+        qs = qs.exclude(room_id=exclude_room_id)
+    return qs.first()
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def room_availability(request):
+    """GET /api/availability/?room_id=X"""
+    room_id = (request.query_params.get("room_id") or "").strip()
+    if not room_id:
+        return Response(
+            {"error": "'room_id' query param is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        classroom = Classroom.objects.select_related("building").get(room_id=room_id)
+    except Classroom.DoesNotExist:
+        return Response(
+            {"error": f"Room '{room_id}' not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    payload = {
+        "room_id": classroom.room_id,
+        "name": classroom.name,
+        "building": classroom.building.name,
+        "floor": classroom.floor,
+        "capacity": classroom.capacity,
+        "status": classroom.status,
+    }
+
+    if classroom.status == Classroom.Status.OCCUPIED:
+        alt = _find_nearest_available(
+            classroom.building_id, classroom.floor, exclude_room_id=room_id
+        )
+        if alt:
+            payload["alternate_room"] = {
+                "room_id": alt.room_id,
+                "name": alt.name,
+                "floor": alt.floor,
+                "capacity": alt.capacity,
+            }
+        else:
+            payload["alternate_room"] = None
+
+    return Response(payload)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def room_availability_all(request):
+    """GET /api/availability/all/  — polled every 10s by frontend."""
+    qs = Classroom.objects.select_related("building").all()
+
+    building_filter = (request.query_params.get("building") or "").strip()
+    floor_filter = (request.query_params.get("floor") or "").strip()
+    if building_filter:
+        qs = qs.filter(building__name__icontains=building_filter)
+    if floor_filter:
+        try:
+            qs = qs.filter(floor=int(floor_filter))
+        except ValueError:
+            pass
+
+    result = []
+    for room in qs.order_by("building__name", "floor", "room_id"):
+        result.append({
+            "room_id": room.room_id,
+            "name": room.name,
+            "building": room.building.name,
+            "floor": room.floor,
+            "capacity": room.capacity,
+            "status": room.status,
+        })
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminUser])
+def room_availability_update(request):
+    """POST /api/availability/update/  — JWT admin only."""
+    room_id = (request.data.get("room_id") or "").strip()
+    new_status = (request.data.get("status") or "").strip().lower()
+
+    if not room_id or not new_status:
+        return Response(
+            {"error": "'room_id' and 'status' fields are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_statuses = {Classroom.Status.AVAILABLE, Classroom.Status.OCCUPIED}
+    if new_status not in valid_statuses:
+        return Response(
+            {"error": f"Invalid status '{new_status}'. Must be 'available' or 'occupied'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        classroom = Classroom.objects.get(room_id=room_id)
+    except Classroom.DoesNotExist:
+        return Response(
+            {"error": f"Room '{room_id}' not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    classroom.status = new_status
+    classroom.save(update_fields=["status"])
+    return Response({
+        "room_id": classroom.room_id,
+        "status": classroom.status,
+        "message": f"Room {room_id} status updated to '{new_status}'.",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Campus nodes list for frontend dropdowns
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def campus_nodes_list(request):
+    """GET /api/nodes/  — returns all CampusNodes for navigation dropdowns."""
+    nodes = CampusNode.objects.select_related("building").order_by("node_type", "name")
+    result = []
+    for n in nodes:
+        result.append({
+            "node_id": n.node_id,
+            "name": n.name,
+            "node_type": n.node_type,
+            "latitude": n.latitude,
+            "longitude": n.longitude,
+            "floor": n.floor,
+            "building": n.building.name if n.building else None,
+        })
+    return Response(result)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def campus_buildings_list(request):
+    """GET /api/buildings/  — returns all CampusBuildings."""
+    buildings = CampusBuilding.objects.all().order_by("name")
+    result = [{
+        "id": b.id,
+        "name": b.name,
+        "latitude": b.latitude,
+        "longitude": b.longitude,
+        "short_code": b.short_code,
+    } for b in buildings]
+    return Response(result)
 
 
 @api_view(["POST"])
