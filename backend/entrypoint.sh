@@ -14,10 +14,11 @@ python manage.py collectstatic --noinput
 
 WORKERS="${GUNICORN_WORKERS:-4}"
 TIMEOUT="${GUNICORN_TIMEOUT:-60}"
+PORT="${PORT:-8000}"
 
-echo "Starting Gunicorn with ${WORKERS} workers..."
+echo "Starting Gunicorn with ${WORKERS} workers on port ${PORT}..."
 exec gunicorn core.wsgi:application \
-  --bind 0.0.0.0:8000 \
+  --bind "0.0.0.0:${PORT}" \
   --workers "${WORKERS}" \
   --timeout "${TIMEOUT}" \
   --access-logfile - \
