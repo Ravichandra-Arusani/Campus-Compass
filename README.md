@@ -17,6 +17,79 @@ A smart campus navigation system with real-time classroom availability, indoor/o
 
 ---
 
+## 🔗 Live Demo
+
+| | URL |
+|---|---|
+| **Frontend App** | *(add Vercel URL after deploying)* |
+| **Backend API** | *(add Render URL after deploying)* |
+
+> ⚠️ Backend is on Render free tier — it sleeps after 15 min of inactivity. First request may take ~30s to wake up.
+
+---
+
+## ☁️ Cloud Deployment Guide
+
+### Backend → [Render.com](https://render.com) (Free Tier)
+
+1. Go to **render.com** → sign in with GitHub → **New → Web Service**
+2. Select the `Campus-Compass` repo
+3. Set these fields exactly:
+
+   | Field | Value |
+   |---|---|
+   | **Root Directory** | `backend` |
+   | **Runtime** | `Python 3` |
+   | **Build Command** | `pip install -r requirements.txt` |
+   | **Start Command** | `gunicorn core.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 60` |
+
+4. In **Environment → Add Environment Variables**:
+
+   | Variable | Value |
+   |---|---|
+   | `DJANGO_ENV` | `prod` |
+   | `DJANGO_SECRET_KEY` | *(generate: `python -c "import secrets; print(secrets.token_hex(50))"`)* |
+   | `DJANGO_ALLOWED_HOSTS` | `your-app.onrender.com` |
+   | `CORS_ALLOWED_ORIGINS` | `https://your-app.vercel.app` |
+   | `DATABASE_URL` | *(from Render Postgres add-on — use the Internal URL)* |
+   | `SECURE_SSL_REDIRECT` | `False` *(Render handles TLS)* |
+   | `SESSION_COOKIE_SECURE` | `True` |
+   | `CSRF_COOKIE_SECURE` | `True` |
+
+5. After first deploy, run migrations via **Render Shell**:
+   ```bash
+   python manage.py migrate
+   python manage.py seed_campus
+   python manage.py seed_data
+   ```
+
+---
+
+### Frontend → [Vercel](https://vercel.com) (Free Tier)
+
+1. Go to **vercel.com** → sign in with GitHub → **New Project**
+2. Import `Campus-Compass` repo
+3. Set these fields exactly:
+
+   | Field | Value |
+   |---|---|
+   | **Root Directory** | `smart-campus-navigation` |
+   | **Framework Preset** | `Vite` |
+   | **Build Command** | `npm run build` |
+   | **Output Directory** | `dist` *(Vite outputs to `dist`, not `build`)* |
+
+4. In **Environment Variables**:
+
+   | Variable | Value |
+   |---|---|
+   | `VITE_API_BASE` | `https://your-app.onrender.com/api` |
+
+5. Click **Deploy** → get URL like `https://campus-compass.vercel.app`
+
+> 💡 After getting both URLs, update the **Live Demo** section above in this README.
+
+---
+
 ## 🚀 Quickstart — No Local Dependencies Required
 
 > **You only need [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed.** No Node.js, Python, or database setup needed.
@@ -28,7 +101,19 @@ git clone https://github.com/Ravichandra-Arusani/Campus-Compass.git
 cd Campus-Compass
 ```
 
-### 2. Start the full stack
+### 2. Set up environment for Docker
+
+```bash
+# Windows (PowerShell):
+copy backend\.env.docker.example backend\.env.docker
+
+# macOS / Linux:
+cp backend/.env.docker.example backend/.env.docker
+```
+
+> The defaults in `.env.docker.example` work out of the box for local use. No edits needed.
+
+### 3. Start the full stack
 
 ```bash
 docker compose up --build
@@ -75,7 +160,7 @@ Campus-Compass/
 │   ├── Dockerfile
 │   ├── entrypoint.sh           # Migrate → collectstatic → Gunicorn
 │   ├── .env.example            # Production env template
-│   └── .env.docker             # Docker Compose env (safe for local use)
+│   └── .env.docker.example     # Docker Compose env template (copy → .env.docker to run)
 │
 ├── smart-campus-navigation/    # React + Vite frontend
 │   ├── src/
