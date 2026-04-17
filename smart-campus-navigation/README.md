@@ -1,3 +1,17 @@
+# Smart Campus Navigation
+
+## 🚀 How to Run the Project
+
+To avoid 500 API errors and ensure both the React frontend and Django backend start simultaneously, **you must use the following command** from the `smart-campus-navigation` directory:
+
+```bash
+npm run dev:full
+```
+
+*(This uses `concurrently` to spin up the Vite dev server and the Django local environment together).*
+
+---
+
 # React + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

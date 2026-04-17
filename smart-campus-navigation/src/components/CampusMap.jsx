@@ -13,6 +13,7 @@ import {
 } from "../outdoor/campusGraph"
 import DestinationSearch from "./DestinationSearch"
 import apiClient from "../services/apiClient"
+import { useToast } from "../hooks/useToast"
 
 const LANDMARK_BUILDINGS = {
   "Srujan Block": {
@@ -37,7 +38,7 @@ const LANDMARK_BUILDINGS = {
   }
 };
 
-const GRAPH_SNAP_MAX_METERS = 150
+const GRAPH_SNAP_MAX_METERS = 30
 
 const VBIT_CENTER = [17.4938, 78.3908]
 const CAMPUS_ENTRANCE_HINT = [17.470938, 78.723407]
@@ -52,7 +53,7 @@ const CAMPUS_ROADS_URL = "/data/Roads.geojson"
 const CAMPUS_BASEMAP_URL = "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png"
 const FOOTPRINT_HOVER_FILL_OPACITY = 0.52
 const EARTH_RADIUS_M = 6371000
-const GEOJSON_CACHE_BUSTER = Date.now() + 10000
+const GEOJSON_VERSION = "1.0.2"
 const GRAPH_CACHE_KEYS = [
   "smart-campus-navigation:graph-cache:v1",
   "cachedGraph",
@@ -217,7 +218,7 @@ function distanceMeters(aLat, aLng, bLat, bLng) {
 
 function withCacheBuster(url) {
   const separator = url.includes("?") ? "&" : "?"
-  return `${url}${separator}v=${GEOJSON_CACHE_BUSTER}`
+  return `${url}${separator}v=${GEOJSON_VERSION}`
 }
 
 function resolveGeolocationErrorMessage(error) {
@@ -296,7 +297,7 @@ function CampusMap({ onHandoffToIndoor }) {
   const [userLocation, setUserLocation] = useState(null)
   const [userLocationLabel, setUserLocationLabel] = useState(
     typeof navigator !== "undefined" && navigator.geolocation
-      ? "Locating..."
+      ? "GPS Ready"
       : "GPS unavailable - enable location access to route from your position"
   )
   const [selectedDest, setSelectedDest] = useState("")
@@ -308,8 +309,11 @@ function CampusMap({ onHandoffToIndoor }) {
   const [buildingConfirm, setBuildingConfirm] = useState(null)
   const pendingRouteRef = useRef(null)
 
-  // NEW UPGRADE STATES
-  const [is3dMode, setIs3dMode] = useState(false)
+  const [manualStart, setManualStart] = useState(null)
+  const [startMode, setStartMode] = useState("gps") // "gps" | "manual" | "picking"
+
+  const { showToast } = useToast()
+
   const [activeBuildingRooms, setActiveBuildingRooms] = useState(null)
   const [allRooms, setAllRooms] = useState([])
   const [campusNodes, setCampusNodes] = useState([])
@@ -369,12 +373,16 @@ function CampusMap({ onHandoffToIndoor }) {
         minZoom: 10,
         pitch: 30,
         bearing: -20,
-        antialias: true  // ← enables smooth 3D building edges
+        antialias: true, // ← enables smooth 3D building edges
+        attributionControl: false
       })
       map.dragRotate.enable();
       map.touchZoomRotate.enableRotation();
       map.keyboard.enable();
-      map.scrollZoom.enable();
+      map.scrollZoom.disable(); // Stop scroll hijack
+      
+      map.on('click', () => map.scrollZoom.enable());
+      map.on('mouseleave', () => map.scrollZoom.disable());
 
       // Prevent map scroll from bleeding into the page
       if (mapNodeRef.current) {
@@ -405,10 +413,16 @@ function CampusMap({ onHandoffToIndoor }) {
           const userLatLng = [pos.coords.latitude, pos.coords.longitude]
           if (typeof window !== "undefined") window._userLocation = userLatLng
           setUserLocation(userLatLng)
-          setUserLocationLabel("You are here")
+          hasGpsFixRef.current = true
+          setUserLocationLabel("GPS Ready")
         },
-        (err) => console.warn("GPS unavailable:", err.message),
-        { enableHighAccuracy: true }
+        (err) => {
+          console.warn("GPS unavailable:", err.message)
+          hasGpsFixRef.current = false
+          setUserLocationLabel(resolveGeolocationErrorMessage(err))
+          if (typeof window !== "undefined") window._userLocation = null
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
       )
     }
 
@@ -598,6 +612,41 @@ function CampusMap({ onHandoffToIndoor }) {
     )
   }, [outdoorPath])
 
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const clickHandler = (e) => {
+      if (startMode !== "picking") return
+      const { lng, lat } = e.lngLat
+      setManualStart({ lat, lng, label: "📍 Custom Location" })
+      setStartMode("manual")
+      map.getCanvas().style.cursor = ""
+    }
+    map.on('click', clickHandler)
+    return () => { map.off('click', clickHandler) }
+  }, [startMode])
+
+  useEffect(() => {
+    if (startMode !== "gps" || !outdoorPath.length) return
+    
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const newLat = pos.coords.latitude
+        const newLng = pos.coords.longitude
+        window._userLocation = [newLat, newLng]
+        setUserLocation([newLat, newLng])
+        
+        if (selectedDest) {
+          handleRoute()
+        }
+      },
+      (err) => console.warn("Watch error:", err),
+      { enableHighAccuracy: true, maximumAge: 3000 }
+    )
+    
+    return () => navigator.geolocation.clearWatch(watchId)
+  }, [startMode, outdoorPath.length, selectedDest])
+
   async function getHybridRoute(startLat, startLng, endLat, endLng, destinationId, abortSignal) {
     const graph = simpleGraphRef.current
     if (!graph) throw new Error("Campus path network is not available.")
@@ -715,6 +764,10 @@ function CampusMap({ onHandoffToIndoor }) {
   // Routing
   // Route from the campus main entrance to the selected destination.
   async function handleRoute(overrideStartLat, overrideStartLng) {
+    if (!selectedDest || !mapRef.current) return
+
+    showToast(`🗺️ Route to ${selectedDest.replace(/_/g, ' ')} started`, "info")
+
     setError("")
     setBuildingConfirm(null)
     if (!selectedDest) { setError("Select a destination."); return }
@@ -730,15 +783,24 @@ function CampusMap({ onHandoffToIndoor }) {
         Number.isFinite(window._userLocation[1])
         ? window._userLocation
         : null
-    const startCoords = globalStart || userLocation
-    if (!startCoords) {
-      setError("Waiting for your GPS location...")
+    
+    const baseStartCoords = 
+      startMode === "manual" && manualStart
+        ? [manualStart.lat, manualStart.lng]
+        : (globalStart || userLocation)
+
+    if (!baseStartCoords && typeof overrideStartLat !== "number") {
+      setError(
+        startMode === "gps"
+          ? "Waiting for GPS... or pick your location from the map!"
+          : "Please select your starting location"
+      )
       return
     }
 
     const [startLat, startLng] = typeof overrideStartLat === "number"
       ? [overrideStartLat, overrideStartLng]
-      : startCoords
+      : baseStartCoords
 
     // If no override, check point-in-polygon and ask for confirmation first.
     if (typeof overrideStartLat !== "number") {
@@ -853,7 +915,7 @@ function CampusMap({ onHandoffToIndoor }) {
               smoothedPath[0]
             )
             smoothedPath.forEach(c => bounds.extend(c))
-            drawMap.fitBounds(bounds, { padding: 60 })
+            drawMap.fitBounds(bounds, { padding: { top: 80, bottom: 80, left: 60, right: 60 }, maxZoom: 18, duration: 1200 })
           }
           return
         }
@@ -975,7 +1037,7 @@ function CampusMap({ onHandoffToIndoor }) {
               [coords[0][1], coords[0][0]]
             )
             coords.forEach(c => bounds.extend([c[1], c[0]]))
-            drawMap.fitBounds(bounds, { padding: 60 })
+            drawMap.fitBounds(bounds, { padding: { top: 80, bottom: 80, left: 60, right: 60 }, maxZoom: 18, duration: 1200 })
           }
           return
         }
@@ -1004,34 +1066,155 @@ function CampusMap({ onHandoffToIndoor }) {
   }
 
   function handleHandoff() {
-    if (!outdoorPath.length) return
-    onHandoffToIndoor?.({ building: "nirmithi", entranceNode: "entrance" })
+    if (!outdoorPath.length || !selectedDest) return
+    let targetBuilding = "nirmithi"
+    const prefix = selectedDest.split('_')[0]
+    if (["nirmithi", "srujan", "pragathi"].includes(prefix)) {
+      targetBuilding = prefix
+    }
+    onHandoffToIndoor?.({ building: targetBuilding, entranceNode: "entrance" })
   }
 
+  const handleClearRoute = () => {
+    if (routeRequestRef.current) {
+      routeRequestRef.current.abort()
+      routeRequestRef.current = null
+    }
+    if (routeLayerRef.current) { clearInterval(routeLayerRef.current); routeLayerRef.current = null }
+    if (destMarkerRef.current) { destMarkerRef.current.remove(); destMarkerRef.current = null }
+    if (typeof window !== "undefined" && window._gpsConnectorLayer) {
+      clearInterval(window._gpsConnectorLayer)
+      window._gpsConnectorLayer = null
+    }
+    if (typeof window !== "undefined" && window._routeLayer) {
+      window._routeLayer.remove()
+    }
+    if (window._movingDot) window._movingDot.remove()
+
+    const drawMap = mapRef.current
+    if (drawMap && drawMap.getSource('route')) {
+      drawMap.getSource('route').setData({ type: "FeatureCollection", features: [] })
+    }
+    
+    setOutdoorPath([])
+    setRouteSteps([])
+  }
+
+  const isRouteActive = outdoorPath.length > 0;
+
   return (
-    <div className="campus-map-wrapper">
-      <div className="campus-map-toolbar map-controls">
-        <DestinationSearch
-          className="campus-map-destination-search"
-          label="Destination"
-          placeholder="Search destination..."
-          options={outdoorDestinationOptions}
-          value={selectedDest}
-          onChange={(id) => { setSelectedDest(id); setError("") }}
-          emptyMessage="No destination found."
-        />
-        <div className="route-buttons">
-          <button type="button" className="route-cta" onClick={handleRoute} disabled={!selectedDest || (userLocationLabel === "Locating..." && !hasGpsFixRef.current)}>
-            <svg xmlns="http://www.w3.org/2000/svg" className="route-cta-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <div className={`campus-map-wrapper ${isRouteActive ? 'route-active-layout' : ''}`}>
+      <div className={`campus-map-toolbar map-controls ${isRouteActive ? 'collapsed' : ''}`}>
+        
+        {/* Compact Summary Bar */}
+        <div className={`compact-summary-bar ${isRouteActive ? 'visible' : ''}`}>
+          <span>
+            <strong>{startMode === "gps" ? "My Location" : manualStart?.label || "Start"}</strong> 
+            {" → "} 
+            <strong>{selectedDest ? selectedDest.replace(/_/g, ' ') : "Dest"}</strong>
+          </span>
+        </div>
+
+        <div className={`toolbar-full-inputs ${isRouteActive ? 'collapsed' : ''}`}>
+          <div className="toolbar-row">
+          <div className="toolbar-field">
+            <label className="field-label">FROM</label>
+            <div className="from-controls">
+              <div className="from-search-wrap">
+                <DestinationSearch
+                  className="campus-map-destination-search"
+                  label="Starting Point"
+                  placeholder="📡 My Current Location"
+                  options={[
+                    { id: "gps", name: "📡 My Current Location" },
+                    ...outdoorDestinationOptions
+                  ]}
+                  value={manualStart?.id || "gps"}
+                  onChange={(id) => {
+                    if (id === "gps") {
+                      setStartMode("gps")
+                      setManualStart(null)
+                    } else {
+                      const entrance = BUILDING_ENTRANCES[id]
+                      if (entrance) {
+                        setManualStart({
+                          lat: entrance[0],
+                          lng: entrance[1],
+                          label: id.replace(/_/g, ' '),
+                          id
+                        })
+                        setStartMode("manual")
+                      }
+                    }
+                  }}
+                  emptyMessage="No locations found"
+                />
+              </div>
+              <button
+                type="button"
+                className={`pick-on-map-btn${startMode === "picking" ? " picking-active" : ""}`}
+                title="Tap a point on the map to set as start"
+                onClick={() => {
+                  setStartMode("picking")
+                  if (mapRef.current) mapRef.current.getCanvas().style.cursor = "crosshair"
+                }}
+              >
+                {startMode === "picking" ? "🎯" : "📌"}
+              </button>
+            </div>
+            {startMode === "gps" && (
+              <div className="from-status gps-active">📡 Using live GPS</div>
+            )}
+            {manualStart && (
+              <div className="from-status">
+                <span>From: <strong>{manualStart.label}</strong></span>
+                <button type="button" className="clear-btn" onClick={() => { setManualStart(null); setStartMode("gps") }}>✕</button>
+              </div>
+            )}
+          </div>
+
+          <div className="toolbar-divider" aria-hidden="true">↓</div>
+
+          <div className="toolbar-field">
+            <label className="field-label">TO</label>
+            <DestinationSearch
+              className="campus-map-destination-search"
+              label="Destination"
+              placeholder="Search destination..."
+              options={outdoorDestinationOptions}
+              value={selectedDest}
+              onChange={(id) => { setSelectedDest(id); setError("") }}
+              emptyMessage="No destinations available"
+            />
+          </div>
+        </div>
+
+        <div className="toolbar-actions">
+          <button
+            type="button"
+            className="route-cta"
+            onClick={handleRoute}
+            disabled={!selectedDest || (userLocationLabel === "Locating..." && !hasGpsFixRef.current)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" width="16" height="16" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6" />
             </svg>
-            <span>{userLocationLabel === "Locating..." && !hasGpsFixRef.current ? "📍 Locating..." : "Start Route"}</span>
+            {userLocationLabel === "Locating..." && !hasGpsFixRef.current ? "Locating…" : "Start Route"}
           </button>
-          <button type="button" className="route-button secondary" onClick={handleHandoff} disabled={!outdoorPath.length}>
+          <button
+            type="button"
+            className="route-button secondary"
+            onClick={handleHandoff}
+            disabled={!outdoorPath.length}
+          >
             Continue Indoors
           </button>
         </div>
-        {error && <span className="campus-map-error">{error}</span>}
+
+        {error && <div className="campus-map-error">{error}</div>}
+        
+        </div> {/* End toolbar-full-inputs */}
+
         {buildingConfirm && (
           <div className="building-confirm-banner">
             <span className="building-confirm-text">
@@ -1045,37 +1228,51 @@ function CampusMap({ onHandoffToIndoor }) {
         )}
       </div>
 
-      <div className="campus-overview-row filter-chips">
-        {campusSummary.map((s) => (
-          <span key={s.id} className="campus-overview-chip">{s.label}: {s.count}</span>
-        ))}
-      </div>
 
-      <div className="map-and-sidebar" style={{ display: "flex", gap: "1rem", position: "relative" }}>
+      <div className="map-and-sidebar" style={{ display: "flex", gap: "1rem", position: "relative", flex: 1, minHeight: 0 }}>
 
-        <div
-          ref={mapNodeRef}
-          className="campus-map-canvas"
+        <button 
+          className={`floating-clear-route ${isRouteActive ? 'visible' : ''}`}
+          onClick={handleClearRoute}
         >
-          {/* NEW Reset View Button */}
-          <button
-            className="reset-3d-btn campus-overview-chip"
-            style={{ cursor: "pointer", background: "#ff7a1a", color: "#000", fontWeight: "bold" }}
-            onClick={() => {
-              if (mapRef.current) {
-                mapRef.current.flyTo({
-                  center: [78.5580, 17.4515],
-                  zoom: 17,
-                  pitch: 45,
-                  bearing: -20,
-                  duration: 1500
-                });
-              }
-            }}
-          >
-            🔄 Reset 3D View
-          </button>
-        </div>
+          ✕ Clear Route
+        </button>
+
+        <button 
+          className={`floating-continue-indoor ${isRouteActive ? 'visible' : ''}`}
+          style={{
+            position: "absolute", bottom: "30px", left: "50%", transform: "translateX(-50%)",
+            zIndex: 10, cursor: "pointer", background: "linear-gradient(135deg, #f59e0b, #ea580c)", 
+            color: "#000", fontWeight: "bold", border: "none", borderRadius: "24px", 
+            padding: "10px 24px", boxShadow: "0 4px 12px rgba(245, 158, 11, 0.4)",
+            display: isRouteActive ? "flex" : "none", alignItems: "center", gap: "8px",
+            fontSize: "14px", animation: "fadeIn 0.4s ease"
+          }}
+          onClick={handleHandoff}
+        >
+          🚶 Continue Indoors →
+        </button>
+
+        <div ref={mapNodeRef} className="campus-map-canvas" />
+
+        {/* NEW Reset View Button */}
+        <button
+          className="reset-3d-btn campus-overview-chip"
+          style={{ position: "absolute", bottom: "30px", right: "20px", zIndex: 10, cursor: "pointer", background: "#ff7a1a", color: "#000", fontWeight: "bold", border: "none", borderRadius: "8px", padding: "8px 12px", boxShadow: "0 2px 6px rgba(0,0,0,0.3)" }}
+          onClick={() => {
+            if (mapRef.current) {
+              mapRef.current.flyTo({
+                center: [78.7237, 17.4709],
+                zoom: 16,
+                pitch: 30,
+                bearing: -20,
+                duration: 1500
+              });
+            }
+          }}
+        >
+          🔄 Reset 3D View
+        </button>
 
         {/* Live Classroom Sidebar Popup */}
         {activeBuildingRooms && (

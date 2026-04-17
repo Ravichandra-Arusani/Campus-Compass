@@ -33,6 +33,8 @@ DEBUG = False
 ALLOWED_HOSTS = env_csv("DJANGO_ALLOWED_HOSTS", "")
 
 INSTALLED_APPS = [
+    "daphne",
+    "channels",
     "corsheaders",
     "rest_framework",
     "navigation",
@@ -75,6 +77,12 @@ TEMPLATES = [
 WSGI_APPLICATION = "core.wsgi.application"
 ASGI_APPLICATION = "core.asgi.application"
 
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
@@ -109,7 +117,7 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGINS = env_csv("CORS_ALLOWED_ORIGINS", "")
 CORS_ALLOW_CREDENTIALS = env_bool("CORS_ALLOW_CREDENTIALS", False)
 

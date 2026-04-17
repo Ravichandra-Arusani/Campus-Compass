@@ -33,6 +33,8 @@ function CinematicLanding() {
           points: 8,
           maxDistance: 18,
           spacing: 15,
+          showDots: true,
+          speed: 2.5,
         })
         return
       }

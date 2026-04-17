@@ -374,7 +374,7 @@ function distanceLatLngMeters(aLat, aLng, bLat, bLng) {
   return distanceMeters({ x: aLat, y: aLng }, { x: bLat, y: bLng })
 }
 
-export function snapToNearestNode(lat, lng, graphOverride = null, maxSnapMeters = 150) {
+export function snapToNearestNode(lat, lng, graphOverride = null, maxSnapMeters = 30) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return null
   }

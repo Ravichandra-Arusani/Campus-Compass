@@ -8,6 +8,8 @@ import Help from "./components/Help"
 import IndoorNavigation from "./components/IndoorNavigation"
 import AdminPanel from "./components/AdminPanel"
 import StickyTabs from "./components/StickyTabs"
+import SplashScreen from "./components/SplashScreen"
+import ToastContainer from "./components/Toast"
 import {
   bootstrapAuth,
   getAuthSnapshot,
@@ -28,13 +30,11 @@ function App() {
   const [hasOpenedAnalytics, setHasOpenedAnalytics] = useState(false)
   const [videoElement, setVideoElement] = useState(null)
   const [authState, setAuthState] = useState(() => getAuthSnapshot())
-  const [indoorStartNode, setIndoorStartNode] = useState(null)
-  const [isNavigating, setIsNavigating] = useState(false)
+  const [indoorBlock, setIndoorBlock] = useState(null)
+
 
   useEffect(() => {
-    const handleRouteState = (e) => setIsNavigating(e.detail?.active || false)
-    window.addEventListener("smart-nav:route-state", handleRouteState)
-    return () => window.removeEventListener("smart-nav:route-state", handleRouteState)
+    // Nav state handled in children
   }, [])
 
   const canViewAnalytics = Boolean(authState.isAuthenticated && authState.isStaff)
@@ -76,11 +76,11 @@ function App() {
           opacity: 1,
           y: 0,
           ease: "power3.out",
+          duration: 0.6,
           scrollTrigger: {
             trigger: "#dashboard",
             start: "top 85%",
-            end: "top 55%",
-            scrub: true,
+            toggleActions: "play none none none",
           },
         }
       )
@@ -179,12 +179,14 @@ function App() {
   }, [refreshScrollLayout])
 
   const handleHandoffToIndoor = useCallback((payload) => {
-    setIndoorStartNode(payload?.entranceNode || null)
+    setIndoorBlock(payload?.building || null)
     setActiveTab("indoor")
   }, [])
 
   return (
     <>
+      <SplashScreen />
+      <ToastContainer />
       <BackgroundVideoLayer
         onVideoReady={setVideoElement}
         onVideoLoaded={handleVideoLoaded}
@@ -196,51 +198,53 @@ function App() {
 
         <section className="dashboard-section" id="dashboard">
           <div className="tabs-shell">
-            <div style={{ display: isNavigating ? 'none' : 'block' }}>
+            <div className="tab-navigation-wrapper">
               <StickyTabs activeTab={resolvedActiveTab} onChange={handleTabChange} tabs={tabs} />
             </div>
 
             <div className="tab-content">
-              {resolvedActiveTab === "map" && (
-                <Suspense
-                  fallback={
-                    <section className="panel">
+              <div key={resolvedActiveTab} className="tab-panel">
+                {resolvedActiveTab === "map" && (
+                  <Suspense
+                    fallback={
+                      <section className="panel">
+                        <div className="panel-head">
+                          <h2>Loading Map...</h2>
+                          <p>Initializing outdoor campus view.</p>
+                        </div>
+                      </section>
+                    }
+                  >
+                    <section className="panel" id="map-section">
                       <div className="panel-head">
-                        <h2>Loading Map...</h2>
-                        <p>Initializing outdoor campus view.</p>
+                        <h2>Campus Map</h2>
+                        <p>Outdoor campus view for inter-building context.</p>
+                      </div>
+                      <div className="map-surface">
+                        <CampusMap onHandoffToIndoor={handleHandoffToIndoor} />
                       </div>
                     </section>
-                  }
-                >
-                  <section className="panel" id="map-section">
-                    <div className="panel-head">
-                      <h2>Campus Map</h2>
-                      <p>Outdoor campus view for inter-building context.</p>
-                    </div>
-                    <div className="map-surface">
-                      <CampusMap onHandoffToIndoor={handleHandoffToIndoor} />
-                    </div>
-                  </section>
-                </Suspense>
-              )}
-              {resolvedActiveTab === "indoor" && <IndoorNavigation startNode={indoorStartNode} />}
-              {resolvedActiveTab === "classroom" && <RoomAvailability />}
-              {resolvedActiveTab === "admin" && <AdminPanel />}
-              {resolvedActiveTab === "help" && <Help />}
-              {resolvedActiveTab === "analytics" && canViewAnalytics && hasOpenedAnalytics && (
-                <Suspense
-                  fallback={
-                    <section className="panel">
-                      <div className="panel-head">
-                        <h2>Loading Analytics...</h2>
-                        <p>Preparing route intelligence dashboards.</p>
-                      </div>
-                    </section>
-                  }
-                >
-                  <Analytics />
-                </Suspense>
-              )}
+                  </Suspense>
+                )}
+                {resolvedActiveTab === "indoor" && <IndoorNavigation initialBlock={indoorBlock} />}
+                {resolvedActiveTab === "classroom" && <RoomAvailability />}
+                {resolvedActiveTab === "admin" && <AdminPanel />}
+                {resolvedActiveTab === "help" && <Help />}
+                {resolvedActiveTab === "analytics" && canViewAnalytics && hasOpenedAnalytics && (
+                  <Suspense
+                    fallback={
+                      <section className="panel">
+                        <div className="panel-head">
+                          <h2>Loading Analytics...</h2>
+                          <p>Preparing route intelligence dashboards.</p>
+                        </div>
+                      </section>
+                    }
+                  >
+                    <Analytics />
+                  </Suspense>
+                )}
+              </div>
             </div>
           </div>
         </section>

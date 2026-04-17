@@ -1,8 +1,11 @@
 // src/components/IndoorNavigation.jsx — Upgraded UI
 import { useMemo, useState } from "react"
-import { floor1, floor2, floor3 } from "../indoor/nirmithiGraph"
+import { floor1 as n1, floor2 as n2, floor3 as n3 } from "../indoor/nirmithiGraph"
+import { floor1 as s1, floor2 as s2, floor3 as s3 } from "../indoor/srujanGraph"
+import { floor1 as p1, floor2 as p2, floor3 as p3 } from "../indoor/pragathiGraph"
 import { astar } from "../indoor/astar"
 import DestinationSearch from "./DestinationSearch"
+import { useToast } from "../hooks/useToast"
 
 const W = 680, H = 820
 const RH = 85
@@ -45,97 +48,57 @@ function strokeColor(id, pathSet, dest, occupiedSet) {
   return ROOM_TYPE[getRoomType(id)].stroke + "66"
 }
 
-// ── Floor data ────────────────────────────────────────────────────────────────
-const FLOORS = {
-  3: {
-    title: "Nirmithi Block · 3rd Floor · CSBS Department",
-    nodes: floor3.nodes,
-    edges: floor3.edges,
-    occupied: new Set(["class_303"]),
-    destinations: [
-      { id: "washroom", name: "Boys Washroom" },
-      { id: "hod_302", name: "HOD Office (302)" },
-      { id: "class_303", name: "Classroom 303" },
-      { id: "lab_304", name: "Lab 304" },
-      { id: "class_305", name: "Classroom 305" },
-    ],
-    layout: [
-      { id: "class_305", x: 20, y: 100, w: 480, h: RH, label: "Classroom 305" },
-      { id: "lab_304", x: 20, y: 235, w: 480, h: RH, label: "Lab 304" },
-      { id: "class_303", x: 20, y: 370, w: 480, h: RH, label: "Classroom 303" },
-      { id: "washroom", x: 20, y: 505, w: 220, h: RH, label: "Boys Washroom" },
-      { id: "hod_302", x: 250, y: 505, w: 250, h: RH, label: "HOD Office 302" },
-      { id: "stairs", x: STAIR_X - 90, y: 660, w: 180, h: 70, label: "Stairs" },
-    ],
-    connectors: [
-      { id: "class_305", x1: 500, y1: 143, x2: RIGHT_X, y2: 143 },
-      { id: "lab_304", x1: 500, y1: 278, x2: RIGHT_X, y2: 278 },
-      { id: "class_303", x1: 500, y1: 413, x2: RIGHT_X, y2: 413 },
-      { id: "hod_302", x1: 500, y1: 548, x2: RIGHT_X, y2: 548 },
-      { id: "washroom", x1: WASH_ACCESS_X, y1: WASH_ACCESS_Y, x2: floor3.nodes.washroom.x, y2: floor3.nodes.washroom.y },
-      { id: "stairs", x1: STAIR_X, y1: floor3.nodes.stairs.y, x2: floor3.nodes.stairs_landing.x, y2: floor3.nodes.stairs_landing.y },
-    ],
-  },
-  2: {
-    title: "Nirmithi Block · 2nd Floor",
-    nodes: floor2.nodes,
-    edges: floor2.edges,
+// ── Floor blueprints generator ──────────────────────────────────────────────────
+function buildLayout(fGraph, fId, bName, rooms) {
+  const { slot1, slot2, slot3, slot4, slot5 } = rooms
+  return {
+    title: `${bName} · Floor ${fId}`,
+    nodes: fGraph.nodes,
+    edges: fGraph.edges,
     occupied: new Set([]),
-    destinations: [
-      { id: "girls_washroom", name: "Girls Washroom" },
-      { id: "staff_room", name: "Staff Room" },
-      { id: "lab_2", name: "Lab" },
-      { id: "class_202", name: "Classroom 202" },
-      { id: "class_205", name: "Classroom 205" },
-    ],
+    destinations: Object.values(rooms).filter(Boolean).map(r => ({ id: r.id, name: r.label })),
     layout: [
-      { id: "class_205", x: 20, y: 100, w: 480, h: RH, label: "Classroom 205" },
-      { id: "class_202", x: 20, y: 235, w: 480, h: RH, label: "Classroom 202" },
-      { id: "lab_2", x: 20, y: 370, w: 480, h: RH, label: "Lab" },
-      { id: "girls_washroom", x: 20, y: 505, w: 220, h: RH, label: "Girls Washroom" },
-      { id: "staff_room", x: 250, y: 505, w: 250, h: RH, label: "Staff Room" },
+      { id: slot1.id, x: 20, y: 100, w: 480, h: RH, label: slot1.label },
+      { id: slot2.id, x: 20, y: 235, w: 480, h: RH, label: slot2.label },
+      { id: slot3.id, x: 20, y: 370, w: 480, h: RH, label: slot3.label },
+      ...(slot4 ? [{ id: slot4.id, x: 20, y: 505, w: 220, h: RH, label: slot4.label }] : []),
+      ...(slot5 ? [{ id: slot5.id, x: 250, y: 505, w: 250, h: RH, label: slot5.label }] : []),
       { id: "stairs", x: STAIR_X - 90, y: 660, w: 180, h: 70, label: "Stairs" },
     ],
     connectors: [
-      { id: "class_205", x1: 500, y1: 143, x2: RIGHT_X, y2: 143 },
-      { id: "class_202", x1: 500, y1: 278, x2: RIGHT_X, y2: 278 },
-      { id: "lab_2", x1: 500, y1: 413, x2: RIGHT_X, y2: 413 },
-      { id: "staff_room", x1: 500, y1: 548, x2: RIGHT_X, y2: 548 },
-      { id: "girls_washroom", x1: WASH_ACCESS_X, y1: WASH_ACCESS_Y, x2: floor2.nodes.girls_washroom.x, y2: floor2.nodes.girls_washroom.y },
-      { id: "stairs", x1: STAIR_X, y1: floor2.nodes.stairs.y, x2: floor2.nodes.stairs_landing.x, y2: floor2.nodes.stairs_landing.y },
+      { id: slot1.id, x1: 500, y1: 143, x2: RIGHT_X, y2: 143 },
+      { id: slot2.id, x1: 500, y1: 278, x2: RIGHT_X, y2: 278 },
+      { id: slot3.id, x1: 500, y1: 413, x2: RIGHT_X, y2: 413 },
+      ...(slot4 ? [{ id: slot4.id, x1: WASH_ACCESS_X, y1: WASH_ACCESS_Y, x2: fGraph.nodes[slot4.id]?.x, y2: fGraph.nodes[slot4.id]?.y }] : []),
+      ...(slot5 ? [{ id: slot5.id, x1: 500, y1: 548, x2: RIGHT_X, y2: 548 }] : []),
+      { id: "stairs", x1: STAIR_X, y1: fGraph.nodes.stairs.y, x2: fGraph.nodes.stairs_landing.x, y2: fGraph.nodes.stairs_landing.y },
     ],
-  },
-  1: {
-    title: "Nirmithi Block · 1st Floor",
-    nodes: floor1.nodes,
-    edges: floor1.edges,
-    occupied: new Set([]),
-    destinations: [
-      { id: "staff_room_f1", name: "Staff Room" },
-      { id: "class_101", name: "Classroom 101" },
-      { id: "lab_102", name: "Lab 102" },
-      { id: "class_105", name: "Classroom 105" },
-    ],
-    layout: [
-      { id: "class_105", x: 20, y: 100, w: 480, h: RH, label: "Classroom 105" },
-      { id: "lab_102", x: 20, y: 235, w: 480, h: RH, label: "Lab 102" },
-      { id: "class_101", x: 20, y: 370, w: 480, h: RH, label: "Classroom 101" },
-      { id: "staff_room_f1", x: 20, y: 505, w: 480, h: RH, label: "Staff Room" },
-      { id: "stairs", x: STAIR_X - 90, y: 660, w: 180, h: 70, label: "Stairs" },
-    ],
-    connectors: [
-      { id: "class_105", x1: 500, y1: 143, x2: RIGHT_X, y2: 143 },
-      { id: "lab_102", x1: 500, y1: 278, x2: RIGHT_X, y2: 278 },
-      { id: "class_101", x1: 500, y1: 413, x2: RIGHT_X, y2: 413 },
-      { id: "staff_room_f1", x1: 500, y1: 548, x2: RIGHT_X, y2: 548 },
-      { id: "stairs", x1: STAIR_X, y1: floor1.nodes.stairs.y, x2: floor1.nodes.stairs_landing.x, y2: floor1.nodes.stairs_landing.y },
-    ],
-  },
+  }
+}
+
+const NIRMITHI_FLOORS = {
+  3: buildLayout(n3, 3, "Nirmithi Block", { slot1: {id:"class_305", label:"Classroom 305"}, slot2: {id:"lab_304", label:"Lab 304"}, slot3: {id:"class_303", label:"Classroom 303"}, slot4: {id:"washroom", label:"Boys Washroom"}, slot5: {id:"hod_302", label:"HOD Office (302)"} }),
+  2: buildLayout(n2, 2, "Nirmithi Block", { slot1: {id:"class_205", label:"Classroom 205"}, slot2: {id:"class_202", label:"Classroom 202"}, slot3: {id:"lab_2", label:"Lab"}, slot4: {id:"girls_washroom", label:"Girls Washroom"}, slot5: {id:"staff_room", label:"Staff Room"} }),
+  1: buildLayout(n1, 1, "Nirmithi Block", { slot1: {id:"class_105", label:"Classroom 105"}, slot2: {id:"lab_102", label:"Lab 102"}, slot3: {id:"class_101", label:"Classroom 101"}, slot4: null, slot5: {id:"staff_room_f1", label:"Staff Room"} })
+}
+NIRMITHI_FLOORS[3].occupied = new Set(["class_303"]);
+
+const SRUJAN_FLOORS = {
+  3: buildLayout(s3, 3, "Srujan Block", { slot1: { id: "lab_301_cs", label: "CS Lab 301" }, slot2: { id: "lab_302_cs", label: "CS Lab 302" }, slot3: { id: "class_303", label: "Classroom 303" }, slot4: { id: "washroom_3", label: "Washroom" }, slot5: { id: "utility_304", label: "Utility Room" } }),
+  2: buildLayout(s2, 2, "Srujan Block", { slot1: { id: "class_201", label: "Classroom 201" }, slot2: { id: "class_202", label: "Classroom 202" }, slot3: { id: "class_203", label: "Classroom 203" }, slot4: { id: "washroom_2", label: "Washroom" }, slot5: { id: "hod_it", label: "IT HOD Office" } }),
+  1: buildLayout(s1, 1, "Srujan Block", { slot1: { id: "class_101", label: "Classroom 101" }, slot2: { id: "class_102", label: "Classroom 102" }, slot3: { id: "staff_room_s", label: "Staff Room" }, slot4: { id: "washroom_1", label: "Washroom" }, slot5: { id: "reception", label: "Reception" } })
+}
+
+const PRAGATHI_FLOORS = {
+  3: buildLayout(p3, 3, "Pragathi Block", { slot1: { id: "class_301_p", label: "Classroom 301" }, slot2: { id: "class_302_p", label: "Classroom 302" }, slot3: { id: "comp_lab", label: "Computer Lab" }, slot4: { id: "washroom_3p", label: "Washroom" }, slot5: { id: "staff_3", label: "Staff Room" } }),
+  2: buildLayout(p2, 2, "Pragathi Block", { slot1: { id: "class_201_p", label: "Classroom 201" }, slot2: { id: "class_202_p", label: "Classroom 202" }, slot3: { id: "class_203_p", label: "Classroom 203" }, slot4: { id: "washroom_2p", label: "Washroom" }, slot5: { id: "seminar_hall", label: "Seminar Hall" } }),
+  1: buildLayout(p1, 1, "Pragathi Block", { slot1: { id: "class_101_p", label: "Classroom 101" }, slot2: { id: "class_102_p", label: "Classroom 102" }, slot3: { id: "accounts", label: "Accounts Dept" }, slot4: { id: "washroom_1p", label: "Washroom" }, slot5: { id: "admin_office", label: "Admin Office" } })
 }
 
 // ── FloorPlan SVG ─────────────────────────────────────────────────────────────
-function FloorPlan({ floorId, path, destination, currentNode, animating }) {
-  const floor = FLOORS[floorId]
+function FloorPlan({ blockId, floorId, path, destination, currentNode, animating }) {
+  const block = BLOCKS[blockId]
+  const floor = block.floors[floorId]
   const pathSet = new Set(path)
   const nodes = floor.nodes
   const youNode = nodes[currentNode] || nodes.stairs
@@ -350,40 +313,52 @@ function StepItem({ num, text, isFirst, isLast }) {
 
 // ── Block data ────────────────────────────────────────────────────────────────
 const BLOCKS = {
-  nirmithi: { name: "Nirmithi Block", floors: FLOORS },
-  srujan: { name: "Srujan Block", floors: {} },
-  aakash: { name: "Aakash Block", floors: {} },
+  nirmithi: { name: "Nirmithi Block", floors: NIRMITHI_FLOORS },
+  srujan: { name: "Srujan Block", floors: SRUJAN_FLOORS },
+  pragathi: { name: "Pragathi Block", floors: PRAGATHI_FLOORS },
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function IndoorNavigation() {
-  const [activeBlock, setActiveBlock] = useState("nirmithi")
+export default function IndoorNavigation({ initialBlock }) {
+  const defaultBlock = initialBlock && BLOCKS[initialBlock] ? initialBlock : "nirmithi";
+  const [activeBlock, setActiveBlock] = useState(defaultBlock)
   const [activeFloor, setActiveFloor] = useState(3)
   const [dest, setDest] = useState("")
   const [path, setPath] = useState([])
   const [error, setError] = useState("")
   const [animating, setAnimating] = useState(false)
+  
+  const { showToast } = useToast()
 
   const blockData = BLOCKS[activeBlock]
   const floorConfig = blockData.floors[activeFloor]
 
   const destOptions = useMemo(() => {
     const opts = []
-    if (blockData.floors) {
-      Object.entries(blockData.floors).forEach(([fId, fData]) => {
+    Object.entries(BLOCKS).forEach(([bId, bData]) => {
+      Object.entries(bData.floors).forEach(([fId, fData]) => {
         fData.destinations.forEach(d => {
-          opts.push({ id: d.id, label: `${d.name} (Floor ${fId})`, floorId: Number(fId) })
+          opts.push({ 
+            id: d.id, 
+            label: `${d.name} (${bData.name} · Floor ${fId})`, 
+            blockId: bId,
+            floorId: Number(fId) 
+          })
         })
       })
-    }
+    })
     return opts.sort((a, b) => a.label.localeCompare(b.label))
-  }, [blockData.floors])
+  }, [])
 
   function handleDestChange(val) {
     setDest(val); setPath([]); setError("")
     if (val) {
       const found = destOptions.find(o => o.id === val)
-      if (found) setActiveFloor(found.floorId)
+      if (found) {
+        setActiveBlock(found.blockId)
+        setActiveFloor(found.floorId)
+        showToast(`📍 Navigating to ${found.label.split(' (')[0]} on Floor ${found.floorId}`, "info")
+      }
     }
   }
 
@@ -469,7 +444,7 @@ export default function IndoorNavigation() {
             options={destOptions}
             value={dest}
             onChange={handleDestChange}
-            emptyMessage="Room not found. Try another block."
+            emptyMessage="🔍 No rooms found across all blocks"
           />
         </div>
         <button className="nav-btn nav-btn-primary" onClick={handleNavigate} disabled={!dest || !floorConfig}>
@@ -517,6 +492,7 @@ export default function IndoorNavigation() {
           {/* Map + Steps */}
           <div className="indoor-map-layout">
             <FloorPlan
+              blockId={activeBlock}
               floorId={activeFloor}
               path={path}
               destination={dest}

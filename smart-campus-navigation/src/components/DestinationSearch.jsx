@@ -33,7 +33,7 @@ function DestinationSearch({
   }, [options])
 
   const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim()
+    const normalizedQuery = (query || "").trim()
     if (!normalizedQuery) {
       return options
     }
@@ -42,7 +42,7 @@ function DestinationSearch({
   }, [options, query, fuse])
 
   function getActiveIndexForQuery(nextQuery, selectedValue = value) {
-    const normalizedQuery = nextQuery.trim()
+    const normalizedQuery = (nextQuery || "").trim()
 
     const nextFilteredOptions = normalizedQuery
       ? fuse.search(normalizedQuery).map(result => result.item)
@@ -65,7 +65,7 @@ function DestinationSearch({
       setOpen(false)
       setActiveIndex(-1)
       if (selectedOption) {
-        setQuery(selectedOption.label)
+        setQuery(selectedOption.label || "")
       }
     }
 
@@ -76,7 +76,7 @@ function DestinationSearch({
   }, [selectedOption])
 
   function commitSelection(option) {
-    setQuery(option.label)
+    setQuery(option.label || "")
     setOpen(false)
     setActiveIndex(-1)
     onChange?.(option.id, option)
@@ -205,12 +205,12 @@ function DestinationSearch({
           aria-autocomplete="list"
           onFocus={() => {
             const nextQuery = selectedOption?.label || ""
-            setQuery(nextQuery)
-            setActiveIndex(getActiveIndexForQuery(nextQuery))
+            setQuery(nextQuery || "")
+            setActiveIndex(getActiveIndexForQuery(nextQuery || ""))
             setOpen(true)
           }}
           onChange={(event) => {
-            const nextQuery = event.target.value
+            const nextQuery = event.target.value || ""
             setQuery(nextQuery)
             setActiveIndex(getActiveIndexForQuery(nextQuery))
             setOpen(true)
