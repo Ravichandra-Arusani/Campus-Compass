@@ -219,7 +219,7 @@ class NodeEdge(models.Model):
         ]
         constraints = [
             models.CheckConstraint(
-                condition=~Q(from_node=F("to_node")),
+                check=~Q(from_node=F("to_node")),
                 name="nodeedge_no_self_loop",
             ),
         ]
